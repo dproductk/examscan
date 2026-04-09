@@ -1,0 +1,15 @@
+Django==4.2
+djangorestframework==3.14.0
+djangorestframework-simplejwt==5.3.1
+psycopg2-binary==2.9.10
+Pillow==11.0.0
+opencv-python-headless==4.10.0.84
+pyzbar==0.1.9
+img2pdf==0.5.1
+openpyxl==3.1.2
+reportlab==4.1.0
+python-decouple==3.8
+django-cors-headers==4.3.1
+django-extensions==3.2.3
+Werkzeug==3.0.1
+pyOpenSSL==24.1.0
