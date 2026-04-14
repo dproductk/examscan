@@ -52,6 +52,7 @@ class Bundle(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name='bundles')
     bundle_number = models.CharField(max_length=100)
     total_sheets = models.PositiveIntegerField()
+    academic_year = models.CharField(max_length=20, default='2025-26', help_text='e.g. 2025-26')
     qr_raw_data = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     created_by = models.ForeignKey(

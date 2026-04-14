@@ -1,106 +1,161 @@
 """
 PDF export utility using ReportLab.
-Generates a results PDF table with roll_number × subject × marks breakdown.
+Generates per-student result card PDFs: college header, student info,
+subject marks table, grand total, generated date.
 """
 import io
+from datetime import date
 from django.http import HttpResponse
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch, mm
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 
-from apps.evaluation.models import EvaluationResult
 
-
-def generate_pdf_report(subject_id=None):
-    """
-    Generate a PDF report of evaluation results.
-    Optionally filter by subject_id.
-    Returns an HttpResponse with the PDF file.
-    """
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=landscape(A4),
-        rightMargin=0.5 * inch, leftMargin=0.5 * inch,
-        topMargin=0.5 * inch, bottomMargin=0.5 * inch,
-    )
-
-    styles = getSampleStyleSheet()
+def _build_student_pdf_elements(student, styles):
+    """Build ReportLab elements for a single student result card."""
     elements = []
 
-    # Title
-    title = Paragraph('ExamFlow — Evaluation Results Report', styles['Title'])
-    elements.append(title)
+    # ── College Header ───────────────────────────
+    header_style = ParagraphStyle(
+        'CollegeHeader', parent=styles['Title'],
+        fontSize=16, leading=20, alignment=TA_CENTER,
+        textColor=colors.HexColor('#1C1D22'),
+    )
+    sub_header = ParagraphStyle(
+        'SubHeader', parent=styles['Normal'],
+        fontSize=10, alignment=TA_CENTER,
+        textColor=colors.HexColor('#64748B'),
+    )
+    elements.append(Paragraph('ExamFlow — Examination Management System', header_style))
+    elements.append(Paragraph('Student Evaluation Report Card', sub_header))
+    elements.append(Spacer(1, 0.25 * inch))
+    elements.append(HRFlowable(
+        width='100%', thickness=1, color=colors.HexColor('#E2E8F0'),
+        spaceAfter=0.2 * inch,
+    ))
+
+    # ── Student Info ─────────────────────────────
+    info_style = ParagraphStyle(
+        'Info', parent=styles['Normal'], fontSize=10, leading=14,
+    )
+    bold_style = ParagraphStyle(
+        'InfoBold', parent=styles['Normal'], fontSize=10, leading=14,
+        textColor=colors.HexColor('#1C1D22'),
+    )
+
+    roll = student.get('roll_number', 'N/A')
+    dept = student.get('department', 'N/A')
+    sem = student.get('semester', 'N/A')
+    acad = student.get('academic_year', 'N/A')
+
+    info_data = [
+        [Paragraph(f'<b>Roll Number:</b> {roll}', info_style),
+         Paragraph(f'<b>Department:</b> {dept}', info_style)],
+        [Paragraph(f'<b>Semester:</b> {sem}', info_style),
+         Paragraph(f'<b>Academic Year:</b> {acad}', info_style)],
+    ]
+    info_table = Table(info_data, colWidths=['50%', '50%'])
+    info_table.setStyle(TableStyle([
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(info_table)
     elements.append(Spacer(1, 0.3 * inch))
 
-    # Query data
-    qs = EvaluationResult.objects.select_related(
-        'answer_sheet', 'answer_sheet__bundle', 'answer_sheet__bundle__subject', 'teacher'
+    # ── Subjects Table ───────────────────────────
+    table_header = ['Subject Code', 'Subject Name', 'Semester', 'Total Marks', 'Evaluated On']
+    table_data = [table_header]
+
+    for subj in student.get('subjects', []):
+        table_data.append([
+            subj.get('subject_code', ''),
+            subj.get('subject_name', ''),
+            str(subj.get('semester', '')),
+            str(subj.get('total_marks', 0)),
+            subj.get('evaluated_on', ''),
+        ])
+
+    col_widths = [1.2 * inch, 2.0 * inch, 0.9 * inch, 1.0 * inch, 1.2 * inch]
+    subjects_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    subjects_table.setStyle(TableStyle([
+        # Header row
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1C1D22')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        # Data rows
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7F8FA')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(subjects_table)
+    elements.append(Spacer(1, 0.2 * inch))
+
+    # ── Grand Total ──────────────────────────────
+    grand_total = student.get('grand_total', 0)
+    total_style = ParagraphStyle(
+        'GrandTotal', parent=styles['Normal'],
+        fontSize=12, alignment=TA_RIGHT,
+        textColor=colors.HexColor('#1C1D22'),
     )
-    if subject_id:
-        qs = qs.filter(answer_sheet__bundle__subject_id=subject_id)
+    elements.append(Paragraph(f'<b>GRAND TOTAL:  {grand_total}</b>', total_style))
+    elements.append(Spacer(1, 0.5 * inch))
 
-    # Build headers
-    headers = ['Roll No.', 'Subject', 'Total', 'Teacher']
+    # ── Footer ───────────────────────────────────
+    elements.append(HRFlowable(
+        width='100%', thickness=0.5, color=colors.HexColor('#E2E8F0'),
+        spaceAfter=0.1 * inch,
+    ))
+    footer_style = ParagraphStyle(
+        'Footer', parent=styles['Normal'],
+        fontSize=8, alignment=TA_CENTER,
+        textColor=colors.HexColor('#94A3B8'),
+    )
+    elements.append(Paragraph(
+        f'Generated on {date.today().strftime("%d %B %Y")} — ExamFlow Examination Management System',
+        footer_style
+    ))
 
-    # Collect section headers
-    section_headers = []
-    first_result = qs.first()
-    if first_result and first_result.section_results:
-        for section in first_result.section_results:
-            section_name = section.get('section_name', '')
-            for q in section.get('questions', []):
-                section_headers.append(f'{section_name}-Q{q.get("question_no", "")}')
-            section_headers.append(f'{section_name} Tot')
+    return elements
 
-    all_headers = headers + section_headers
-    table_data = [all_headers]
 
-    # Build data rows
-    for result in qs:
-        sheet = result.answer_sheet
-        subject = sheet.bundle.subject
-
-        row = [
-            sheet.roll_number,
-            subject.subject_code,
-            str(result.total_marks),
-            result.teacher.full_name if result.teacher else '',
-        ]
-
-        if result.section_results:
-            for section in result.section_results:
-                for q in section.get('questions', []):
-                    row.append(str(q.get('marks_obtained', 0)))
-                row.append(str(section.get('section_total', 0)))
-
-        table_data.append(row)
-
-    if len(table_data) == 1:
-        elements.append(Paragraph('No evaluation results found.', styles['Normal']))
-    else:
-        # Create table
-        table = Table(table_data, repeatRows=1)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2B579A')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F2F2F2')]),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        elements.append(table)
-
+def generate_student_pdf_response(student):
+    """Generate a downloadable PDF HttpResponse for a single student."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=0.6 * inch, leftMargin=0.6 * inch,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+    )
+    styles = getSampleStyleSheet()
+    elements = _build_student_pdf_elements(student, styles)
     doc.build(elements)
 
+    roll = student.get('roll_number', 'student')
     response = HttpResponse(content_type='application/pdf')
-    response['Content-Disposition'] = 'attachment; filename="evaluation_results.pdf"'
+    response['Content-Disposition'] = f'attachment; filename="result_{roll}.pdf"'
     response.write(buffer.getvalue())
     buffer.close()
     return response
+
+
+def generate_student_pdf_bytes(student):
+    """Generate PDF bytes (BytesIO) for a single student — used for ZIP bundling."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=0.6 * inch, leftMargin=0.6 * inch,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+    )
+    styles = getSampleStyleSheet()
+    elements = _build_student_pdf_elements(student, styles)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer

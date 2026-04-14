@@ -21,7 +21,7 @@ function SchemeManager() {
   const [subjectCode, setSubjectCode] = useState('')
   const [department, setDepartment] = useState('')
   const [semester, setSemester] = useState('')
-  const [sections, setSections] = useState([])
+  const [questions, setQuestions] = useState([])
 
   useEffect(() => {
     fetchSchemes()
@@ -46,18 +46,26 @@ function SchemeManager() {
     setDepartment(scheme.department || '')
     setSemester(scheme.semester?.toString() || '')
     
-    // Map sections to include internal IDs for React keys
-    const loadedSections = (scheme.sections || []).map(sec => ({
+    // Map existing structure
+    const loadedQuestions = (scheme.sections || []).map(q => ({
       id: uuidv4(),
-      section_name: sec.section_name,
-      questions: (sec.questions || []).map(q => ({
+      name: q.name || 'Q1',
+      rule: q.rule || 'all',
+      rule_count: q.rule_count || '',
+      sub_questions: (q.sub_questions || []).map(sq => ({
         id: uuidv4(),
-        question_no: q.question_no,
-        max_marks: q.max_marks || ''
+        name: sq.name || 'A',
+        rule: sq.rule || 'all',
+        rule_count: sq.rule_count || '',
+        parts: (sq.parts || []).map(p => ({
+          id: uuidv4(),
+          name: p.name || '1',
+          max_marks: p.max_marks || ''
+        }))
       }))
     }))
     
-    setSections(loadedSections)
+    setQuestions(loadedQuestions)
     setShowForm(true)
   }
 
@@ -67,73 +75,259 @@ function SchemeManager() {
     setSubjectCode('')
     setDepartment('')
     setSemester('')
-    setSections([
+    setQuestions([
       {
         id: uuidv4(),
-        section_name: 'Section 1',
-        questions: [{ id: uuidv4(), question_no: 'Q1', max_marks: '' }]
+        name: 'Q1',
+        rule: 'all',
+        rule_count: '',
+        sub_questions: [
+          {
+            id: uuidv4(),
+            name: 'Q1A',
+            rule: 'all',
+            rule_count: '',
+            parts: [
+              { id: uuidv4(), name: '1', max_marks: '' },
+              { id: uuidv4(), name: '2', max_marks: '' },
+              { id: uuidv4(), name: '3', max_marks: '' }
+            ]
+          },
+          {
+            id: uuidv4(),
+            name: 'Q1B',
+            rule: 'all',
+            rule_count: '',
+            parts: [
+               { id: uuidv4(), name: '1', max_marks: '' },
+               { id: uuidv4(), name: '2', max_marks: '' }
+            ]
+          }
+        ]
       }
     ])
     setShowForm(true)
   }
 
-  // Section Builder Helpers
-  const addSection = () => {
-    setSections([
-      ...sections,
-      { id: uuidv4(), section_name: `Section ${sections.length + 1}`, questions: [{ id: uuidv4(), question_no: 'Q1', max_marks: '' }] }
+  // --- Question Helpers ---
+  const addQuestion = () => {
+    const nextQIdx = questions.length + 1;
+    setQuestions([
+      ...questions,
+      {
+        id: uuidv4(),
+        name: `Q${nextQIdx}`,
+        rule: 'all',
+        rule_count: '',
+        sub_questions: [
+          {
+            id: uuidv4(),
+            name: `Q${nextQIdx}A`,
+            rule: 'all',
+            rule_count: '',
+            parts: [{ id: uuidv4(), name: '1', max_marks: '' }]
+          }
+        ]
+      }
     ])
   }
 
-  const removeSection = (secId) => {
-    setSections(sections.filter(s => s.id !== secId))
+  const removeQuestion = (qId) => {
+    setQuestions(questions.filter(q => q.id !== qId))
   }
 
-  const updateSectionName = (secId, name) => {
-    setSections(sections.map(s => s.id === secId ? { ...s, section_name: name } : s))
+  const updateQuestion = (qId, field, value) => {
+    setQuestions(questions.map(q => q.id === qId ? { ...q, [field]: value } : q))
   }
 
-  const addQuestion = (secId) => {
-    setSections(sections.map(s => {
-      if (s.id === secId) {
+  // --- Sub-Question Helpers ---
+  const addSubQuestion = (qId) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
+        const nextLetter = String.fromCharCode(65 + q.sub_questions.length);
         return {
-          ...s,
-          questions: [...s.questions, { id: uuidv4(), question_no: `Q${s.questions.length + 1}`, max_marks: '' }]
+          ...q,
+          sub_questions: [
+            ...q.sub_questions,
+            {
+              id: uuidv4(),
+              name: `${q.name}${nextLetter}`,
+              rule: 'all',
+              rule_count: '',
+              parts: [{ id: uuidv4(), name: '1', max_marks: '' }]
+            }
+          ]
         }
       }
-      return s
+      return q;
     }))
   }
 
-  const removeQuestion = (secId, qId) => {
-    setSections(sections.map(s => {
-      if (s.id === secId) {
-        return { ...s, questions: s.questions.filter(q => q.id !== qId) }
-      }
-      return s
-    }))
-  }
-
-  const updateQuestion = (secId, qId, field, value) => {
-    setSections(sections.map(s => {
-      if (s.id === secId) {
+  const removeSubQuestion = (qId, sqId) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
         return {
-          ...s,
-          questions: s.questions.map(q => q.id === qId ? { ...q, [field]: value } : q)
+          ...q,
+          sub_questions: q.sub_questions.filter(sq => sq.id !== sqId)
         }
       }
-      return s
+      return q;
     }))
   }
 
-  const calculateSectionTotal = (sec) => {
-    return sec.questions.reduce((sum, q) => sum + (parseFloat(q.max_marks) || 0), 0)
+  const updateSubQuestion = (qId, sqId, field, value) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
+        return {
+          ...q,
+          sub_questions: q.sub_questions.map(sq => sq.id === sqId ? { ...sq, [field]: value } : sq)
+        }
+      }
+      return q;
+    }))
   }
 
-  const calculateGrandTotal = () => {
-    return sections.reduce((sum, s) => sum + calculateSectionTotal(s), 0)
+  // --- Part Helpers ---
+  const addPart = (qId, sqId) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
+        return {
+          ...q,
+          sub_questions: q.sub_questions.map(sq => {
+            if (sq.id === sqId) {
+              return {
+                ...sq,
+                parts: [
+                  ...sq.parts,
+                  { id: uuidv4(), name: `${sq.parts.length + 1}`, max_marks: '' }
+                ]
+              }
+            }
+            return sq;
+          })
+        }
+      }
+      return q;
+    }))
   }
-  const totalQuestions = sections.reduce((sum, s) => sum + s.questions.length, 0)
+
+  const removePart = (qId, sqId, pId) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
+        return {
+          ...q,
+          sub_questions: q.sub_questions.map(sq => {
+            if (sq.id === sqId) {
+              return {
+                ...sq,
+                parts: sq.parts.filter(p => p.id !== pId)
+              }
+            }
+            return sq;
+          })
+        }
+      }
+      return q;
+    }))
+  }
+
+  const updatePart = (qId, sqId, pId, field, value) => {
+    setQuestions(questions.map(q => {
+      if (q.id === qId) {
+        return {
+          ...q,
+          sub_questions: q.sub_questions.map(sq => {
+            if (sq.id === sqId) {
+              return {
+                ...sq,
+                parts: sq.parts.map(p => p.id === pId ? { ...p, [field]: value } : p)
+              }
+            }
+            return sq;
+          })
+        }
+      }
+      return q;
+    }))
+  }
+
+  // Calculations
+  const calculateTotals = () => {
+    let totalOnPaper = 0;
+    let resultOutOf = 0;
+    let totalQuestions = questions.length;
+
+    questions.forEach(q => {
+      let qTotalOnPaper = 0;
+      let sqOuts = [];
+
+      q.sub_questions.forEach(sq => {
+        let sqTotalOnPaper = 0;
+        let pOuts = [];
+
+        sq.parts.forEach(p => {
+          const marks = parseFloat(p.max_marks) || 0;
+          sqTotalOnPaper += marks;
+          pOuts.push(marks);
+        });
+
+        qTotalOnPaper += sqTotalOnPaper;
+
+        let sqResult = 0;
+        if (sq.rule === 'any' && parseInt(sq.rule_count) > 0) {
+          pOuts.sort((a, b) => b - a);
+          sqResult = pOuts.slice(0, parseInt(sq.rule_count)).reduce((sum, val) => sum + val, 0);
+        } else {
+          sqResult = sqTotalOnPaper;
+        }
+        sqOuts.push(sqResult);
+      });
+
+      totalOnPaper += qTotalOnPaper;
+
+      let qResult = 0;
+      if (q.rule === 'any' && parseInt(q.rule_count) > 0) {
+        sqOuts.sort((a, b) => b - a);
+        qResult = sqOuts.slice(0, parseInt(q.rule_count)).reduce((sum, val) => sum + val, 0);
+      } else {
+        qResult = sqOuts.reduce((sum, val) => sum + val, 0);
+      }
+      resultOutOf += qResult;
+    });
+
+    return {
+      totalOnPaper,
+      resultOutOf,
+      extraMarks: totalOnPaper < resultOutOf ? 0 : totalOnPaper - resultOutOf,
+      totalQuestions
+    };
+  };
+
+  const calculateSubQuestionResultOutOf = (sq) => {
+    let pOuts = [];
+    sq.parts.forEach(p => {
+      pOuts.push(parseFloat(p.max_marks) || 0);
+    });
+    if (sq.rule === 'any' && parseInt(sq.rule_count) > 0) {
+      pOuts.sort((a, b) => b - a);
+      return pOuts.slice(0, parseInt(sq.rule_count)).reduce((sum, val) => sum + val, 0);
+    }
+    return pOuts.reduce((sum, val) => sum + val, 0);
+  };
+
+  const calculateQuestionResultOutOf = (q) => {
+    let sqOuts = [];
+    q.sub_questions.forEach(sq => {
+      sqOuts.push(calculateSubQuestionResultOutOf(sq));
+    });
+    if (q.rule === 'any' && parseInt(q.rule_count) > 0) {
+      sqOuts.sort((a, b) => b - a);
+      return sqOuts.slice(0, parseInt(q.rule_count)).reduce((sum, val) => sum + val, 0);
+    }
+    return sqOuts.reduce((sum, val) => sum + val, 0);
+  };
+
+  const totals = calculateTotals();
 
   const handleSave = async () => {
     if (!subjectName || !subjectCode) {
@@ -141,12 +335,19 @@ function SchemeManager() {
       return
     }
 
-    // Clean payload for API (remove internal IDs)
-    const cleanSections = sections.map(sec => ({
-      section_name: sec.section_name,
-      questions: sec.questions.map(q => ({
-        question_no: q.question_no,
-        max_marks: parseFloat(q.max_marks) || 0
+    // Clean payload for API (remove internal IDs, convert types)
+    const cleanQuestions = questions.map(q => ({
+      name: q.name,
+      rule: q.rule,
+      rule_count: q.rule === 'any' ? (parseInt(q.rule_count) || null) : null,
+      sub_questions: q.sub_questions.map(sq => ({
+        name: sq.name,
+        rule: sq.rule,
+        rule_count: sq.rule === 'any' ? (parseInt(sq.rule_count) || null) : null,
+        parts: sq.parts.map(p => ({
+          name: p.name,
+          max_marks: parseFloat(p.max_marks) || 0
+        }))
       }))
     }))
 
@@ -158,8 +359,8 @@ function SchemeManager() {
         subject_name: subjectName,
         subject_code: subjectCode,
         department: department,
-        semester: semester,
-        sections: cleanSections
+        semester: semester ? parseInt(semester) : null,
+        sections: cleanQuestions 
       }
 
       if (editingId) {
@@ -173,7 +374,17 @@ function SchemeManager() {
       setShowForm(false)
       fetchSchemes()
     } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || err.response?.data?.sections?.[0] || 'Save failed.' })
+      console.error("Save error:", err, err.response?.data);
+      let errMsg = 'Save failed.';
+      if (err.response?.data) {
+        if (typeof err.response.data === 'string') errMsg = err.response.data;
+        else if (err.response.data.error) errMsg = err.response.data.error;
+        else if (err.response.data.sections && Array.isArray(err.response.data.sections)) errMsg = err.response.data.sections[0];
+        else errMsg = JSON.stringify(err.response.data);
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      setMessage({ type: 'error', text: errMsg });
     } finally {
       setSaving(false)
     }
@@ -184,8 +395,8 @@ function SchemeManager() {
         <div className="page-header">
           <div className="flex-between">
             <div>
-              <h1>Marking Schemes</h1>
-              <p>Manage question paper marking schemes</p>
+              <h1 style={{ fontWeight: 800 }}>Marking Schemes</h1>
+              <p style={{ color: 'var(--text-secondary)' }}>Manage question paper marking schemes</p>
             </div>
             {!showForm && (
               <button className="btn btn-primary" onClick={handleNew} id="new-scheme-btn">
@@ -201,157 +412,184 @@ function SchemeManager() {
           </div>
         )}
 
-        {/* Form */}
         {showForm ? (
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ marginBottom: '1rem' }}>
-              {editingId ? 'Edit Marking Scheme' : 'New Marking Scheme'}
-            </h3>
-
-            <div className="grid-2">
-              <div className="form-group">
-                <label className="form-label">Subject name</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. Data Structures"
-                  value={subjectName}
-                  onChange={e => setSubjectName(e.target.value)}
-                />
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Type the full subject name</span>
+          <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            
+            {/* Top Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+              <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h2 style={{ color: 'var(--color-primary)', fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1 }}>{totals.totalOnPaper}</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Total on paper</p>
               </div>
-              <div className="form-group">
-                <label className="form-label">Subject code</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. CS301"
-                  value={subjectCode}
-                  onChange={e => setSubjectCode(e.target.value)}
-                />
+              <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h2 style={{ color: 'var(--color-success)', fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1 }}>{totals.resultOutOf}</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Result out of</p>
               </div>
-              <div className="form-group">
-                <label className="form-label">Department</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. Computer Science"
-                  value={department}
-                  onChange={e => setDepartment(e.target.value)}
-                />
+              <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h2 style={{ color: 'rgb(147, 51, 234)', fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1 }}>{totals.extraMarks}</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Extra / choice marks</p>
               </div>
-              <div className="form-group">
-                <label className="form-label">Semester</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  placeholder="e.g. 5"
-                  value={semester}
-                  onChange={e => setSemester(e.target.value)}
-                />
+              <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h2 style={{ color: 'var(--text-primary)', fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1 }}>{totals.totalQuestions}</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Questions</p>
               </div>
             </div>
 
-            <div style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
-              <h4 style={{ marginBottom: '0.5rem' }}>Sections & questions</h4>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                Add sections (e.g. Section A, Section B), then add questions inside each section with their max marks.
-              </p>
-            </div>
-
-            {/* Visual Builder */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {sections.map((sec, secIdx) => (
-                <div key={sec.id} style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '1rem', background: 'var(--bg-primary)' }}>
-                  <div className="flex-between" style={{ marginBottom: '1rem' }}>
-                    <input
-                      type="text"
-                      className="form-input"
-                      style={{ width: '300px', fontSize: '1rem', fontWeight: 600 }}
-                      value={sec.section_name}
-                      onChange={e => updateSectionName(sec.id, e.target.value)}
-                      placeholder="Section name"
-                    />
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                      <span style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)', padding: '4px 12px', borderRadius: '16px', fontSize: '0.85rem', fontWeight: 600 }}>
-                        {sec.questions.length} questions • {calculateSectionTotal(sec)} marks
-                      </span>
-                      <button className="btn btn-ghost btn-sm" onClick={() => removeSection(sec.id)}>✕</button>
-                    </div>
-                  </div>
-
-                  {/* Questions wrapper */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingLeft: '1rem' }}>
-                    {sec.questions.map((q, qIdx) => (
-                      <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span style={{ color: 'var(--text-muted)', width: '20px' }}>{qIdx + 1}.</span>
-                        <input
+            {/* Subject details card */}
+            <div className="card" style={{ padding: '1.5rem' }}>
+                <h3 style={{ marginBottom: '1.5rem', fontSize: '1.1rem' }}>Subject details</h3>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>Subject Name</label>
+                        <input 
                           type="text"
-                          className="form-input"
-                          style={{ width: '100px' }}
-                          value={q.question_no}
-                          onChange={e => updateQuestion(sec.id, q.id, 'question_no', e.target.value)}
-                          placeholder="Q No."
+                          value={subjectName}
+                          onChange={e => setSubjectName(e.target.value)}
+                          placeholder="e.g. Data Structures"
+                          style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', minWidth: '200px' }} 
                         />
-                        <span style={{ color: 'var(--text-muted)' }}>Max</span>
-                        <input
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>Subject Code</label>
+                        <input 
+                          type="text"
+                          value={subjectCode}
+                          onChange={e => setSubjectCode(e.target.value)}
+                          placeholder="e.g. CS301"
+                          style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', width: '120px' }} 
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>Department</label>
+                        <input 
+                          type="text"
+                          value={department}
+                          onChange={e => setDepartment(e.target.value)}
+                          placeholder="e.g. Computer Science"
+                          style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', minWidth: '150px' }} 
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>Semester</label>
+                        <input 
                           type="number"
-                          className="form-input"
-                          style={{ width: '100px' }}
-                          value={q.max_marks}
-                          onChange={e => updateQuestion(sec.id, q.id, 'max_marks', e.target.value)}
-                          placeholder="5"
+                          value={semester}
+                          onChange={e => setSemester(e.target.value)}
+                          placeholder="e.g. 5"
+                          style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', width: '90px' }} 
                         />
-                        <span style={{ color: 'var(--text-muted)' }}>marks</span>
-                        <button className="btn btn-ghost btn-sm" onClick={() => removeQuestion(sec.id, q.id)}>✕</button>
-                      </div>
-                    ))}
-                    
-                    <button 
-                      className="btn btn-secondary btn-sm" 
-                      style={{ width: 'fit-content', marginTop: '0.5rem' }} 
-                      onClick={() => addQuestion(sec.id)}
-                    >
-                      + Add question
-                    </button>
-                  </div>
+                    </div>
                 </div>
+            </div>
+
+            {/* Paper structure grid */}
+            <div className="card" style={{ padding: '1.5rem' }}>
+              <h3 style={{ marginBottom: '1.5rem', fontSize: '1.1rem' }}>Paper structure</h3>
+              {questions.map((q, qIdx) => (
+                  <div key={q.id} style={{ border: '1px solid #e2e8f0', borderRadius: '12px', marginBottom: '1.5rem', overflow: 'hidden' }}>
+                     {/* Question Header */}
+                     <div style={{ padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                        <div style={{ fontWeight: 700, fontSize: '1.05rem', minWidth: '30px' }}>{q.name}</div>
+                        <div style={{ color: '#64748b', fontSize: '0.85rem' }}>Sub-question rule:</div>
+                        <select 
+                           style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.4rem 0.8rem', fontSize: '0.9rem', outline: 'none' }}
+                           value={q.rule}
+                           onChange={e => updateQuestion(q.id, 'rule', e.target.value)}
+                        >
+                           <option value="all">Answer all</option>
+                           <option value="any">Attempt any</option>
+                        </select>
+                        {q.rule === 'any' && (
+                            <input 
+                              type="number" 
+                              style={{ width: '60px', padding: '0.4rem', borderRadius: '6px', border: '1px solid #cbd5e1', outline: 'none' }} 
+                              value={q.rule_count} 
+                              onChange={e => updateQuestion(q.id, 'rule_count', e.target.value)} 
+                              placeholder="e.g. 2"
+                            />
+                        )}
+                        <div style={{ marginLeft: 'auto', background: '#dcfce7', color: '#16a34a', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700 }}>
+                          {calculateQuestionResultOutOf(q)} marks
+                        </div>
+                        <button style={{ background: 'transparent', border: 'none', color: '#cbd5e1', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '0.5rem' }} onClick={() => removeQuestion(q.id)}>&times;</button>
+                     </div>
+
+                     {/* Sub-questions */}
+                     <div style={{ padding: '0' }}>
+                        {q.sub_questions.map((sq, sqIdx) => (
+                            <div key={sq.id} style={{ borderBottom: sqIdx < q.sub_questions.length - 1 ? '1px solid #f1f5f9' : 'none', padding: '1.5rem' }}>
+                                {/* Sub-question Header */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem' }}>
+                                    <div style={{ fontWeight: 600, fontSize: '0.95rem', minWidth: '35px' }}>{sq.name}</div>
+                                    <div style={{ color: '#64748b', fontSize: '0.85rem' }}>Part rule:</div>
+                                    <select 
+                                        style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.4rem 0.8rem', fontSize: '0.9rem', outline: 'none' }}
+                                        value={sq.rule}
+                                        onChange={e => updateSubQuestion(q.id, sq.id, 'rule', e.target.value)}
+                                    >
+                                       <option value="all">Answer all</option>
+                                       <option value="any">Attempt any</option>
+                                    </select>
+                                    {sq.rule === 'any' && (
+                                       <input 
+                                         type="number" 
+                                         style={{ width: '60px', padding: '0.4rem', borderRadius: '6px', border: '1px solid #cbd5e1', outline: 'none' }} 
+                                         value={sq.rule_count} 
+                                         onChange={e => updateSubQuestion(q.id, sq.id, 'rule_count', e.target.value)} 
+                                         placeholder="e.g. 2"
+                                       />
+                                    )}
+                                    <div style={{ marginLeft: 'auto', background: '#f1f5f9', color: '#475569', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700 }}>
+                                       {calculateSubQuestionResultOutOf(sq)} marks
+                                    </div>
+                                    <button style={{ background: 'transparent', border: 'none', color: '#e2e8f0', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '0.5rem' }} onClick={() => removeSubQuestion(q.id, sq.id)}>&times;</button>
+                                </div>
+
+                                {/* Parts grid */}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                                    {sq.parts.map((p, pIdx) => (
+                                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#f8fafc', padding: '0.4rem 0.8rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                            <span style={{ color: '#64748b', fontSize: '0.9rem', fontWeight: 500 }}>{p.name}.</span>
+                                            <input 
+                                                type="number" 
+                                                style={{ width: '48px', background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.4rem', textAlign: 'center', fontSize: '0.95rem', outline: 'none' }} 
+                                                value={p.max_marks}
+                                                placeholder=""
+                                                onChange={e => updatePart(q.id, sq.id, p.id, 'max_marks', e.target.value)}
+                                            />
+                                            <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>marks</span>
+                                            <button style={{ background: 'transparent', border: 'none', color: '#cbd5e1', cursor: 'pointer', marginLeft: '0.2rem', padding: '0 4px', fontSize: '1.1rem' }} onClick={() => removePart(q.id, sq.id, p.id)}>&times;</button>
+                                        </div>
+                                    ))}
+                                    <button style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '38px', height: '38px', border: '1px dashed #cbd5e1', borderRadius: '8px', background: '#fafafb', color: '#94a3b8', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => addPart(q.id, sq.id)}>+</button>
+                                </div>
+                            </div>
+                        ))}
+                     </div>
+                     <div style={{ padding: '1rem', background: '#fafafa', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'center' }}>
+                         <button className="btn btn-secondary btn-sm" style={{ background: 'white', border: '1px solid #cbd5e1', color: '#475569', padding: '0.5rem 1rem', borderRadius: '6px', fontWeight: 600, width: 'fit-content' }} onClick={() => addSubQuestion(q.id)}>
+                            + Add {String.fromCharCode(65 + q.sub_questions.length)}
+                         </button>
+                     </div>
+                  </div>
               ))}
-
-              <button 
-                className="btn btn-secondary" 
-                style={{ width: '100%', padding: '0.75rem' }} 
-                onClick={addSection}
-              >
-                + Add section
-              </button>
-            </div>
-
-            {/* Totals Summary */}
-            <div style={{ background: 'var(--color-info-bg)', borderRadius: '8px', padding: '1rem', marginTop: '1.5rem', display: 'flex', gap: '2rem' }}>
-              <div>
-                <div style={{ color: 'var(--color-info)', fontSize: '0.85rem' }}>Sections</div>
-                <div style={{ color: 'var(--color-info)', fontSize: '1.2rem', fontWeight: 600 }}>{sections.length}</div>
-              </div>
-              <div>
-                <div style={{ color: 'var(--color-info)', fontSize: '0.85rem' }}>Questions</div>
-                <div style={{ color: 'var(--color-info)', fontSize: '1.2rem', fontWeight: 600 }}>{totalQuestions}</div>
-              </div>
-              <div>
-                <div style={{ color: 'var(--color-info)', fontSize: '0.85rem' }}>Total marks</div>
-                <div style={{ color: 'var(--color-info)', fontSize: '1.2rem', fontWeight: 600 }}>{calculateGrandTotal()}</div>
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1rem' }}>
+                  <button className="btn btn-secondary" style={{ padding: '0.75rem 2rem', border: '1px dashed #cbd5e1', background: '#f8fafc', color: '#475569', borderRadius: '8px', fontWeight: 600 }} onClick={addQuestion}>
+                      + Add question
+                  </button>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+            <div style={{ display: 'flex', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', marginTop: '0.5rem' }}>
               <button 
                 className="btn btn-primary" 
+                style={{ padding: '0.75rem 2rem', fontSize: '1rem' }}
                 onClick={handleSave} 
                 disabled={saving}
               >
                 {saving ? <LoadingSpinner size={16} /> : 'Save scheme'}
               </button>
-              <button className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn btn-secondary" style={{ padding: '0.75rem 2rem', fontSize: '1rem' }} onClick={() => setShowForm(false)}>Cancel</button>
             </div>
           </div>
         ) : (
@@ -359,14 +597,14 @@ function SchemeManager() {
           loading ? (
             <LoadingSpinner message="Loading schemes..." />
           ) : (
-            <div className="table-container">
+            <div className="table-container fade-in">
               <table>
                 <thead>
                   <tr>
                     <th>Subject</th>
                     <th>Details</th>
                     <th>Total Marks</th>
-                    <th>Sections</th>
+                    <th>Paper Config</th>
                     <th>Action</th>
                   </tr>
                 </thead>
@@ -374,7 +612,7 @@ function SchemeManager() {
                   {schemes.map((s) => (
                     <tr key={s.id}>
                       <td>
-                        <div style={{ fontWeight: 600 }}>{s.subject_name}</div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{s.subject_name}</div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{s.subject_code}</div>
                       </td>
                       <td style={{ color: 'var(--text-secondary)' }}>
@@ -382,10 +620,10 @@ function SchemeManager() {
                          <div style={{ fontSize: '0.85rem' }}>Sem: {s.semester || '-'}</div>
                       </td>
                       <td>
-                        <span style={{ color: 'var(--color-primary-light)', fontSize: '1.1rem', fontWeight: 700 }}>{s.total_marks}</span>
+                        <span style={{ color: 'var(--color-success)', fontSize: '1.1rem', fontWeight: 700 }}>{s.total_marks}</span>
                       </td>
                       <td style={{ color: 'var(--text-secondary)' }}>
-                        {s.sections?.length || 0} section(s)
+                        {s.sections?.length || 0} question(s)
                       </td>
                       <td>
                         <button className="btn btn-secondary btn-sm" onClick={() => handleEdit(s)}>

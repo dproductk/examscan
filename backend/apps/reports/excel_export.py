@@ -1,102 +1,122 @@
 """
 Excel export utility using openpyxl.
-Generates a results spreadsheet with roll_number × subject × marks breakdown.
+Generates a workbook with two sheets:
+  1. Detail — one row per student per subject
+  2. Summary — one row per student with grand total
 """
 from django.http import HttpResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-from apps.evaluation.models import EvaluationResult
-from apps.scanning.models import AnswerSheet
 
-
-def generate_excel_report(subject_id=None):
+def generate_excel_report(students):
     """
-    Generate an Excel report of evaluation results.
-    Optionally filter by subject_id.
+    Generate an Excel report from a list of student dicts.
+    Each student dict has: roll_number, department, semester, academic_year,
+                           subjects: [{subject_code, subject_name, total_marks, max_marks, evaluated_on}],
+                           grand_total
     Returns an HttpResponse with the Excel file.
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = 'Evaluation Results'
 
-    # Styles
-    header_font = Font(bold=True, color='FFFFFF', size=12)
-    header_fill = PatternFill(start_color='2B579A', end_color='2B579A', fill_type='solid')
+    # ── Styles ────────────────────────────────────
+    header_font = Font(bold=True, color='FFFFFF', size=11)
+    header_fill = PatternFill(start_color='1C1D22', end_color='1C1D22', fill_type='solid')
     header_align = Alignment(horizontal='center', vertical='center')
     thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin'),
+        left=Side(style='thin', color='E2E8F0'),
+        right=Side(style='thin', color='E2E8F0'),
+        top=Side(style='thin', color='E2E8F0'),
+        bottom=Side(style='thin', color='E2E8F0'),
     )
+    data_align = Alignment(horizontal='center', vertical='center')
+    alt_fill = PatternFill(start_color='F7F8FA', end_color='F7F8FA', fill_type='solid')
 
-    # Query data
-    qs = EvaluationResult.objects.select_related(
-        'answer_sheet', 'answer_sheet__bundle', 'answer_sheet__bundle__subject', 'teacher'
-    )
-    if subject_id:
-        qs = qs.filter(answer_sheet__bundle__subject_id=subject_id)
+    # ── Detail Sheet ──────────────────────────────
+    ws_detail = wb.active
+    ws_detail.title = 'Detail'
 
-    # Build headers
-    headers = ['Roll Number', 'Subject Code', 'Subject Name', 'Total Marks', 'Teacher']
-
-    # Collect all section/question headers from the first result
-    section_headers = []
-    first_result = qs.first()
-    if first_result and first_result.section_results:
-        for section in first_result.section_results:
-            section_name = section.get('section_name', '')
-            for q in section.get('questions', []):
-                q_no = q.get('question_no', '')
-                section_headers.append(f'{section_name}-Q{q_no}')
-            section_headers.append(f'{section_name} Total')
-
-    all_headers = headers + section_headers
-
-    # Write headers
-    for col_idx, header in enumerate(all_headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+    detail_headers = [
+        'Roll Number', 'Department', 'Semester', 'Academic Year',
+        'Subject Code', 'Subject Name', 'Total Marks', 'Max Marks', 'Evaluated On',
+    ]
+    for col_idx, header in enumerate(detail_headers, 1):
+        cell = ws_detail.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_align
         cell.border = thin_border
 
-    # Write data rows
-    for row_idx, result in enumerate(qs, 2):
-        sheet = result.answer_sheet
-        subject = sheet.bundle.subject
+    row_idx = 2
+    for student in students:
+        for subj in student.get('subjects', []):
+            row_data = [
+                student.get('roll_number', ''),
+                student.get('department', ''),
+                student.get('semester', ''),
+                student.get('academic_year', ''),
+                subj.get('subject_code', ''),
+                subj.get('subject_name', ''),
+                subj.get('total_marks', 0),
+                subj.get('max_marks', 0),
+                subj.get('evaluated_on', ''),
+            ]
+            for col_idx, value in enumerate(row_data, 1):
+                cell = ws_detail.cell(row=row_idx, column=col_idx, value=value)
+                cell.border = thin_border
+                cell.alignment = data_align
+                if row_idx % 2 == 0:
+                    cell.fill = alt_fill
+            row_idx += 1
 
-        row_data = [
-            sheet.roll_number,
-            subject.subject_code,
-            subject.subject_name,
-            result.total_marks,
-            result.teacher.full_name if result.teacher else '',
-        ]
-
-        # Add section breakdown
-        if result.section_results:
-            for section in result.section_results:
-                for q in section.get('questions', []):
-                    row_data.append(q.get('marks_obtained', 0))
-                row_data.append(section.get('section_total', 0))
-
-        for col_idx, value in enumerate(row_data, 1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal='center')
-
-    # Auto-width columns
-    for col in ws.columns:
-        max_length = 0
+    # Auto-width
+    for col in ws_detail.columns:
+        max_len = 0
         col_letter = col[0].column_letter
         for cell in col:
             if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max_length + 4
+                max_len = max(max_len, len(str(cell.value)))
+        ws_detail.column_dimensions[col_letter].width = max_len + 4
 
-    # Return response
+    # ── Summary Sheet ─────────────────────────────
+    ws_summary = wb.create_sheet('Summary')
+
+    summary_headers = [
+        'Roll Number', 'Department', 'Semester', 'Academic Year',
+        'Subjects Evaluated', 'Grand Total',
+    ]
+    for col_idx, header in enumerate(summary_headers, 1):
+        cell = ws_summary.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    for row_idx, student in enumerate(students, 2):
+        row_data = [
+            student.get('roll_number', ''),
+            student.get('department', ''),
+            student.get('semester', ''),
+            student.get('academic_year', ''),
+            len(student.get('subjects', [])),
+            student.get('grand_total', 0),
+        ]
+        for col_idx, value in enumerate(row_data, 1):
+            cell = ws_summary.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = data_align
+            if row_idx % 2 == 0:
+                cell.fill = alt_fill
+
+    for col in ws_summary.columns:
+        max_len = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        ws_summary.column_dimensions[col_letter].width = max_len + 4
+
+    # ── Response ──────────────────────────────────
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )

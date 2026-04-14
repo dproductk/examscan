@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { getBundles } from '../../api/bundles'
-import { getReportsSummary } from '../../api/reports'
 import axiosInstance from '../../api/axiosInstance'
 import LoadingSpinner from '../../components/LoadingSpinner'
 
@@ -25,13 +24,18 @@ function ExamDashboard() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [bundlesRes, statsRes, teachersRes] = await Promise.all([
+      const [bundlesRes, teachersRes] = await Promise.all([
         getBundles(),
-        getReportsSummary(),
         axiosInstance.get('/api/users/?role=teacher'),
       ])
-      setBundles(bundlesRes.data.results || bundlesRes.data)
-      setStats(statsRes.data)
+      const fetchedBundles = bundlesRes.data.results || bundlesRes.data
+      setBundles(fetchedBundles)
+      setStats({
+        total_bundles: fetchedBundles.length,
+        unassigned_bundles: fetchedBundles.filter(b => b.assigned_count === 0 && b.status === 'submitted').length,
+        assigned_bundles: fetchedBundles.filter(b => b.assigned_count > 0).length,
+        total_sheets: fetchedBundles.reduce((sum, b) => sum + (b.sheets_count || b.total_sheets || 0), 0)
+      })
       setTeachers(teachersRes.data.results || teachersRes.data || [])
     } catch (err) {
       console.error("Failed to fetch dashboard data", err)

@@ -14,3 +14,15 @@ export const exportPdf = (params) =>
     params,
     responseType: 'blob',
   })
+
+export const exportStudentPdf = (rollNumber, params) =>
+  axiosInstance.get(`/api/reports/export/student-pdf/${rollNumber}/`, {
+    params,
+    responseType: 'blob',
+  })
+
+export const exportAllPdfs = (params) =>
+  axiosInstance.get('/api/reports/export/all-pdfs/', {
+    params,
+    responseType: 'blob',
+  })

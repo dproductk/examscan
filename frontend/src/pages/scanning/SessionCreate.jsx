@@ -252,7 +252,7 @@ function SessionCreate() {
         {activeBundles.map(bundle => (
           <div key={bundle.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem' }}>
             <div>
-              <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Bundle #{bundle.id}</div>
+              <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Bundle #{bundle.bundle_number || bundle.id}</div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>- - {bundle.total_sheets} total sheets</div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>

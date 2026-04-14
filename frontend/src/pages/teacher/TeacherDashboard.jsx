@@ -191,7 +191,7 @@ function TeacherDashboard() {
                                             <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
                                               <button
                                                 className="btn btn-primary btn-sm"
-                                                onClick={() => navigate(`/teacher/evaluate/${sheet.id}`)}
+                                                onClick={() => navigate(`/teacher/evaluate/${sheet.id}`, { state: { subjectCode: bundle.subject_code } })}
                                                 id={`evaluate-sheet-${sheet.id}`}
                                               >
                                                 {sheet.status === 'completed' ? 'View Details' : 'Evaluate Paper'}

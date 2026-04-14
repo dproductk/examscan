@@ -21,49 +21,71 @@ class EvaluationResultSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'submitted_at', 'graded_at', 'last_edited_at', 'teacher', 'total_marks', 'was_amended', 'amended_at']
 
     def validate_section_results(self, value):
-        """Validate marks_obtained for every question in every section."""
+        """Validate marks_obtained for every part using the new Q -> SQ -> Part schema."""
         if not isinstance(value, list) or len(value) == 0:
             raise serializers.ValidationError('section_results must be a non-empty list.')
 
         errors = {}
         computed_total = 0
 
-        for section in value:
-            section_name = section.get('section_name', 'Unknown')
-            if 'questions' not in section or not isinstance(section['questions'], list):
-                raise serializers.ValidationError(
-                    f'Section "{section_name}" must have a "questions" list.'
-                )
+        for q in value:
+            q_name = q.get('name', 'Unknown')
+            if 'sub_questions' not in q or not isinstance(q['sub_questions'], list):
+                raise serializers.ValidationError(f'Question "{q_name}" must have a "sub_questions" list.')
 
-            section_total = 0
-            for q in section['questions']:
-                q_no = q.get('question_no', '?')
-                max_marks = q.get('max_marks', 0)
-                marks_obtained = q.get('marks_obtained')
+            sq_totals = []
+            for sq in q['sub_questions']:
+                sq_name = sq.get('name', 'Unknown')
+                if 'parts' not in sq or not isinstance(sq['parts'], list):
+                    raise serializers.ValidationError(f'Sub-question "{q_name}{sq_name}" must have a "parts" list.')
 
-                if marks_obtained is None:
-                    errors[f'Section {section_name}, Q{q_no}'] = ['marks_obtained is required.']
-                    continue
+                part_totals = []
+                for p in sq['parts']:
+                    p_name = p.get('name', '?')
+                    max_marks = p.get('max_marks', 0)
+                    marks_obtained = p.get('marks_obtained')
 
-                if not isinstance(marks_obtained, (int, float)):
-                    errors[f'Section {section_name}, Q{q_no}'] = ['marks_obtained must be a number.']
-                    continue
+                    if marks_obtained is None:
+                        errors[f'{q_name}{sq_name}.{p_name}'] = ['marks_obtained is required.']
+                        continue
 
-                if marks_obtained < 0 or marks_obtained > max_marks:
-                    errors[f'Section {section_name}, Q{q_no}'] = [
-                        f'marks_obtained must be between 0 and {max_marks}.'
-                    ]
-                    continue
+                    if not isinstance(marks_obtained, (int, float)):
+                        errors[f'{q_name}{sq_name}.{p_name}'] = ['marks_obtained must be a number.']
+                        continue
 
-                section_total += marks_obtained
+                    if marks_obtained < 0 or marks_obtained > max_marks:
+                        errors[f'{q_name}{sq_name}.{p_name}'] = [f'must be between 0 and {max_marks}.']
+                        continue
 
-            section['section_total'] = section_total
-            computed_total += section_total
+                    part_totals.append(marks_obtained)
+
+                # apply sub-question attempt rule
+                sq_rule = sq.get('rule', 'all')
+                sq_rule_count = sq.get('rule_count')
+                if sq_rule == 'any' and isinstance(sq_rule_count, int) and sq_rule_count > 0:
+                    part_totals.sort(reverse=True)
+                    sq_total = sum(part_totals[:sq_rule_count])
+                else:
+                    sq_total = sum(part_totals)
+                
+                sq['obtained_total'] = sq_total
+                sq_totals.append(sq_total)
+
+            # apply question attempt rule
+            q_rule = q.get('rule', 'all')
+            q_rule_count = q.get('rule_count')
+            if q_rule == 'any' and isinstance(q_rule_count, int) and q_rule_count > 0:
+                sq_totals.sort(reverse=True)
+                q_total = sum(sq_totals[:q_rule_count])
+            else:
+                q_total = sum(sq_totals)
+            
+            q['obtained_total'] = q_total
+            computed_total += q_total
 
         if errors:
             raise serializers.ValidationError(errors)
 
-        # Store computed total for use in create/update
         self._computed_total = computed_total
         return value
 

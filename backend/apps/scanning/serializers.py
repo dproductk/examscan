@@ -26,33 +26,58 @@ class MarkingSchemeSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'total_marks']
 
     def validate_sections(self, value):
-        """Validate the sections JSON structure."""
+        """Validate the new questions -> sub_questions -> parts JSON structure."""
         if not isinstance(value, list) or len(value) == 0:
-            raise serializers.ValidationError('Sections must be a non-empty list.')
+            raise serializers.ValidationError('Paper structure must be a non-empty list of questions.')
 
-        for section in value:
-            if 'section_name' not in section:
-                raise serializers.ValidationError('Each section must have a "section_name".')
-            if 'questions' not in section or not isinstance(section['questions'], list):
-                raise serializers.ValidationError(
-                    f'Section "{section["section_name"]}" must have a "questions" list.'
-                )
-            for q in section['questions']:
-                if 'question_no' not in q or 'max_marks' not in q:
-                    raise serializers.ValidationError(
-                        'Each question must have "question_no" and "max_marks".'
-                    )
-                if not isinstance(q['max_marks'], (int, float)) or q['max_marks'] < 0:
-                    raise serializers.ValidationError(
-                        f'max_marks for question {q["question_no"]} must be a non-negative number.'
-                    )
+        for q in value:
+            if 'name' not in q:
+                raise serializers.ValidationError('Each question must have a "name".')
+            if 'sub_questions' not in q or not isinstance(q['sub_questions'], list):
+                raise serializers.ValidationError(f'Question "{q.get("name")}" must have a "sub_questions" list.')
+            
+            for sq in q['sub_questions']:
+                if 'name' not in sq:
+                    raise serializers.ValidationError('Each sub-question must have a "name".')
+                if 'parts' not in sq or not isinstance(sq['parts'], list):
+                    raise serializers.ValidationError(f'Sub-question "{sq.get("name")}" must have a "parts" list.')
+                
+                for p in sq['parts']:
+                    if 'max_marks' not in p:
+                        raise serializers.ValidationError('Each part must have "max_marks".')
+                    if not isinstance(p['max_marks'], (int, float)) or p['max_marks'] < 0:
+                        raise serializers.ValidationError('Part max_marks must be a non-negative number.')
         return value
 
     def _compute_total(self, sections):
+        """
+        Computes Result Out Of.
+        Rule for "any X": sorts children by max total and takes top X.
+        """
         total = 0
-        for section in sections:
-            for q in section.get('questions', []):
-                total += q.get('max_marks', 0)
+        for q in sections:
+            sq_totals = []
+            for sq in q.get('sub_questions', []):
+                part_totals = [p.get('max_marks', 0) for p in sq.get('parts', [])]
+                
+                sq_rule = sq.get('rule', 'all')
+                sq_rule_count = sq.get('rule_count')
+                
+                if sq_rule == 'any' and isinstance(sq_rule_count, int) and sq_rule_count > 0:
+                    part_totals.sort(reverse=True)
+                    sq_totals.append(sum(part_totals[:sq_rule_count]))
+                else:
+                    sq_totals.append(sum(part_totals))
+
+            q_rule = q.get('rule', 'all')
+            q_rule_count = q.get('rule_count')
+            
+            if q_rule == 'any' and isinstance(q_rule_count, int) and q_rule_count > 0:
+                sq_totals.sort(reverse=True)
+                total += sum(sq_totals[:q_rule_count])
+            else:
+                total += sum(sq_totals)
+                
         return total
 
     def create(self, validated_data):
@@ -77,7 +102,7 @@ class BundleSerializer(serializers.ModelSerializer):
         model = Bundle
         fields = [
             'id', 'subject', 'subject_code', 'subject_name',
-            'bundle_number', 'total_sheets', 'qr_raw_data',
+            'bundle_number', 'total_sheets', 'academic_year', 'qr_raw_data',
             'status', 'created_by', 'created_by_name', 'created_at',
             'sheets_count', 'graded_count', 'assigned_count'
         ]

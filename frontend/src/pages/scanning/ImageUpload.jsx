@@ -263,6 +263,7 @@ function ImageUpload() {
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
+                  capture="environment"
                   onChange={handleFileSelect}
                   style={{ display: 'none' }}
                   id="image-file-input"

@@ -26,6 +26,13 @@ class MarkingSchemeListCreateView(generics.ListCreateAPIView):
             return [IsExamDept()]
         return [IsAuthenticated()]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        subject_code = self.request.query_params.get('subject_code')
+        if subject_code:
+            qs = qs.filter(subject__subject_code=subject_code)
+        return qs
+
     def create(self, request, *args, **kwargs):
         subject_code = request.data.get('subject_code')
         subject_name = request.data.get('subject_name')

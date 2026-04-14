@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { getSheetPdfUrl, flagSheet } from '../../api/answerSheets'
 import { getEvaluation, submitEvaluation } from '../../api/evaluations'
@@ -20,6 +20,7 @@ function EvaluationScreen() {
   const { user, accessToken, logout } = useAuth()
   const navigate = useNavigate()
 
+  const location = useLocation()
   const [scheme, setScheme] = useState(null)
   const [existingResult, setExistingResult] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -34,11 +35,30 @@ function EvaluationScreen() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch marking scheme
-        const schemesRes = await getMarkingSchemes()
-        const schemes = schemesRes.data.results || schemesRes.data
-        if (schemes.length > 0) {
-          setScheme(schemes[0]) // Will be refined when we know the subject
+        let subjectCode = location.state?.subjectCode
+
+        // Fallback: If no subjectCode in state, try to find it from answering sheet data
+        // For absolute safety we could fetch it explicitly, but typically teachers come from dashboard.
+        // Let's assume we can fetch all assigned sheets and find this one.
+        if (!subjectCode) {
+           const { getAnswerSheets } = await import('../../api/answerSheets')
+           const sheetsRes = await getAnswerSheets()
+           const allSheets = sheetsRes.data.results || sheetsRes.data || []
+           const currentSheet = allSheets.find(s => s.id === parseInt(id))
+           if (currentSheet) subjectCode = currentSheet.subject_code
+        }
+
+        if (subjectCode) {
+           // Fetch marking scheme explicitly for this subject
+           const schemesRes = await getMarkingSchemes({ subject_code: subjectCode })
+           const schemes = schemesRes.data.results || schemesRes.data || []
+           if (schemes.length > 0) {
+             setScheme(schemes[0])
+           } else {
+             setMessage({ type: 'error', text: `No marking scheme found for subject ${subjectCode}.` })
+           }
+        } else {
+           setMessage({ type: 'error', text: `Could not identify subject for sheet #${id}. Please return to Dashboard and try again.` })
         }
 
         // Try to fetch existing evaluation
@@ -55,7 +75,7 @@ function EvaluationScreen() {
       }
     }
     fetchData()
-  }, [id])
+  }, [id, location.state])
 
   const handleSubmit = async (sectionResults, grandTotal) => {
     setSubmitting(true)
