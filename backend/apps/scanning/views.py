@@ -338,10 +338,21 @@ class AnswerSheetFinalizeView(APIView):
             answer_sheet.pdf_version += 1
             answer_sheet.save()
 
+        # ── Cleanup: delete raw scanned images now that PDF is compiled ──
+        deleted_count = 0
+        for img in images:
+            try:
+                if img.image and os.path.isfile(img.image.path):
+                    os.remove(img.image.path)
+            except Exception:
+                pass  # Don't fail the whole request over a stale file
+            img.delete()
+            deleted_count += 1
+
         log_action(
             request, 'SCAN', 'AnswerSheet', answer_sheet.pk,
             new_value={'roll_number': roll_number, 'pdf_version': answer_sheet.pdf_version},
-            notes=f'Answer sheet finalized for roll {roll_number}.'
+            notes=f'Answer sheet finalized for roll {roll_number}. {deleted_count} raw images cleaned up.'
         )
 
         return Response(
