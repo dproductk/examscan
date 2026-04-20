@@ -13,8 +13,8 @@ function ImageUpload() {
   const fileInputRef = useRef(null)
   const webcamRef = useRef(null)
 
-  const [images, setImages] = useState([]) // [{id, preview, rollNumber, pageNumber}]
-  const [currentRoll, setCurrentRoll] = useState('')
+  const [images, setImages] = useState([]) // [{id, preview, token, pageNumber}]
+  const [currentToken, setCurrentToken] = useState('')
   const [isFirstPage, setIsFirstPage] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
@@ -71,16 +71,16 @@ function ImageUpload() {
     formData.append('bundle_id', bundleId)
     formData.append('page_number', images.length + 1)
     formData.append('is_first_page', isFirstPage ? 'true' : 'false')
-    if (!isFirstPage && currentRoll) {
-      formData.append('roll_number', currentRoll)
+    if (!isFirstPage && currentToken) {
+      formData.append('token', currentToken)
     }
 
     try {
       const { data } = await uploadImage(formData)
 
-      if (data.detected_roll_number) {
-        setCurrentRoll(data.detected_roll_number)
-        setMessage({ type: 'success', text: `Roll number detected: ${data.detected_roll_number}` })
+      if (data.detected_token) {
+        setCurrentToken(data.detected_token)
+        setMessage({ type: 'success', text: `✓ Barcode detected. Student Token: ${data.detected_token}` })
       }
 
       setImages((prev) => [
@@ -88,7 +88,7 @@ function ImageUpload() {
         {
           id: data.id,
           preview: URL.createObjectURL(file),
-          rollNumber: data.roll_number,
+          token: data.token || currentToken,
           pageNumber: data.page_number,
         },
       ])
@@ -115,7 +115,7 @@ function ImageUpload() {
     const blob = await res.blob()
     const file = new File([blob], 'captured_page.jpg', { type: 'image/jpeg' })
     processFile(file)
-  }, [webcamRef, images.length, isFirstPage, currentRoll])
+  }, [webcamRef, images.length, isFirstPage, currentToken])
 
   const handleDelete = async (imageId, index) => {
     try {
@@ -128,8 +128,8 @@ function ImageUpload() {
   }
 
   const handleFinalize = async () => {
-    if (!currentRoll) {
-      setMessage({ type: 'error', text: 'No roll number detected. Upload a first page with barcode.' })
+    if (!currentToken) {
+      setMessage({ type: 'error', text: 'No token detected. Upload a first page with barcode.' })
       return
     }
 
@@ -137,15 +137,15 @@ function ImageUpload() {
     setMessage({ type: '', text: '' })
 
     try {
-      await finalizeSheet({ bundle_id: bundleId, roll_number: currentRoll })
-      setMessage({ type: 'success', text: `Answer sheet for ${currentRoll} finalized!` })
+      await finalizeSheet({ bundle_id: bundleId, token: currentToken })
+      setMessage({ type: 'success', text: `Answer sheet for token ${currentToken} finalized!` })
 
       // Reload bundle to reflect incremented sheets_count
       await loadBundle()
 
       // Reset for next student
       setImages([])
-      setCurrentRoll('')
+      setCurrentToken('')
       setIsFirstPage(true)
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.error || 'Finalization failed.' })
@@ -156,7 +156,7 @@ function ImageUpload() {
 
   const startNewSheet = () => {
     setImages([])
-    setCurrentRoll('')
+    setCurrentToken('')
     setIsFirstPage(true)
     setMessage({ type: '', text: '' })
   }
@@ -218,13 +218,13 @@ function ImageUpload() {
           </div>
         </div>
 
-        {/* Current roll number display */}
-        {currentRoll && (
+        {/* Current token display */}
+        {currentToken && (
           <div className="card" style={{ marginBottom: '1.5rem', background: 'var(--color-primary-glow)' }}>
             <div className="flex-between">
               <div>
-                <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>Current Roll Number</span>
-                <h2 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 800 }}>{currentRoll}</h2>
+                <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>Student Token (Encrypted)</span>
+                <h2 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 800, fontFamily: 'monospace' }}>{currentToken}</h2>
               </div>
               <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)' }}>
                 {images.length} page{images.length !== 1 ? 's' : ''} uploaded
@@ -254,7 +254,7 @@ function ImageUpload() {
               </button>
               <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', marginBottom: isFirstPage ? '1rem' : '0' }}>
                 {isFirstPage
-                  ? 'First page must contain the student barcode for roll number detection.'
+                  ? 'First page must contain the encrypted barcode label for student identification.'
                   : 'Upload subsequent pages in order.'}
               </p>
               
@@ -334,7 +334,7 @@ function ImageUpload() {
         {/* Image thumbnails */}
         {images.length > 0 && (
           <div style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ marginBottom: '1rem', fontSize: 'var(--font-size-lg)' }}>Uploaded Pages ({currentRoll})</h3>
+            <h3 style={{ marginBottom: '1rem', fontSize: 'var(--font-size-lg)' }}>Uploaded Pages ({currentToken})</h3>
             <div className="grid-4">
               {images.map((img, idx) => (
                 <div key={img.id} className="card" style={{ padding: '0.75rem', position: 'relative' }}>
@@ -373,7 +373,7 @@ function ImageUpload() {
             <button
               className="btn btn-success btn-lg"
               onClick={handleFinalize}
-              disabled={finalizing || !currentRoll}
+              disabled={finalizing || !currentToken}
               id="finalize-sheet-btn"
             >
               {finalizing ? <LoadingSpinner size={20} /> : '✓ Finalize Answer Sheet'}

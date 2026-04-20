@@ -711,3 +711,36 @@ tr:hover td {
 .mt-lg { margin-top: var(--space-lg); }
 .mb-md { margin-bottom: var(--space-md); }
 .mb-lg { margin-bottom: var(--space-lg); }
+
+/* ── Print Styles (Barcode Sheets) ────── */
+.print-only {
+  display: none !important;
+}
+
+@media print {
+  .no-print,
+  .sidebar,
+  .topbar,
+  .page-header,
+  .toast,
+  .modal-backdrop {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .main-content {
+    margin-left: 0 !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .page-container {
+    padding: 0 !important;
+  }
+}

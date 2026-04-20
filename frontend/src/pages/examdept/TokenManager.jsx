@@ -1,0 +1,469 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useAuth } from '../../context/AuthContext'
+import { generateTokens, listTokens, uploadTokenFile } from '../../api/tokens'
+import axiosInstance from '../../api/axiosInstance'
+import LoadingSpinner from '../../components/LoadingSpinner'
+import JsBarcode from 'jsbarcode'
+
+// ── Barcode Label Component ──────────────────────────────
+function BarcodeLabel({ token }) {
+  const svgRef = useRef()
+  useEffect(() => {
+    if (svgRef.current && token) {
+      JsBarcode(svgRef.current, token, {
+        format: 'CODE128',
+        width: 1.5,
+        height: 40,
+        displayValue: true,
+        fontSize: 11,
+        margin: 4,
+      })
+    }
+  }, [token])
+  return <svg ref={svgRef} />
+}
+
+function TokenManager() {
+  const { user } = useAuth()
+
+  // Subject selection
+  const [subjects, setSubjects] = useState([])
+  const [selectedSubject, setSelectedSubject] = useState('')
+  const [loadingSubjects, setLoadingSubjects] = useState(true)
+
+  // Input modes
+  const [inputMode, setInputMode] = useState('manual') // 'manual' | 'file'
+  const [rollNumberText, setRollNumberText] = useState('')
+  const [uploadFile, setUploadFile] = useState(null)
+  const fileInputRef = useRef(null)
+
+  // Preview before generation
+  const [previewRolls, setPreviewRolls] = useState([])
+  const [showPreview, setShowPreview] = useState(false)
+
+  // Results
+  const [generatedTokens, setGeneratedTokens] = useState([])
+  const [existingTokens, setExistingTokens] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState({ type: '', text: '' })
+
+  // Tab for viewing existing vs generated
+  const [activeTab, setActiveTab] = useState('generate') // 'generate' | 'existing'
+
+  useEffect(() => {
+    fetchSubjects()
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'existing' && selectedSubject) {
+      fetchExistingTokens()
+    }
+  }, [activeTab, selectedSubject])
+
+  const fetchSubjects = async () => {
+    try {
+      const res = await axiosInstance.get('/api/bundles/subjects/')
+      setSubjects(res.data.results || res.data || [])
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to load subjects.' })
+    } finally {
+      setLoadingSubjects(false)
+    }
+  }
+
+  const fetchExistingTokens = async () => {
+    if (!selectedSubject) return
+    setLoading(true)
+    try {
+      const res = await listTokens({ subject_id: selectedSubject })
+      setExistingTokens(res.data.results || res.data || [])
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to load existing tokens.' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Manual input: parse textarea ──
+  const handleParseManual = () => {
+    const rolls = rollNumberText
+      .split(/[\n,;]+/)
+      .map(r => r.trim())
+      .filter(r => r.length > 0)
+    const unique = [...new Set(rolls)]
+    if (unique.length === 0) {
+      setMessage({ type: 'error', text: 'Please enter at least one roll number.' })
+      return
+    }
+    setPreviewRolls(unique)
+    setShowPreview(true)
+    setMessage({ type: '', text: '' })
+  }
+
+  // ── File upload: parse and preview ──
+  const handleFileUpload = async () => {
+    if (!uploadFile || !selectedSubject) {
+      setMessage({ type: 'error', text: 'Please select a subject and upload a file.' })
+      return
+    }
+    setLoading(true)
+    setMessage({ type: '', text: '' })
+    try {
+      const formData = new FormData()
+      formData.append('file', uploadFile)
+      formData.append('subject_id', selectedSubject)
+      const res = await uploadTokenFile(formData)
+      const data = res.data
+      setGeneratedTokens(data.tokens || [])
+      setShowPreview(false)
+      setMessage({
+        type: 'success',
+        text: `✓ ${data.count} tokens generated from ${data.source_file}`
+      })
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err.response?.data?.error || 'File upload failed.'
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Generate tokens from preview ──
+  const handleGenerate = async () => {
+    if (!selectedSubject || previewRolls.length === 0) return
+    setLoading(true)
+    setMessage({ type: '', text: '' })
+    try {
+      const res = await generateTokens({
+        subject_id: parseInt(selectedSubject),
+        roll_numbers: previewRolls,
+      })
+      setGeneratedTokens(res.data)
+      setShowPreview(false)
+      setMessage({
+        type: 'success',
+        text: `✓ ${res.data.length} tokens generated successfully!`
+      })
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err.response?.data?.error || 'Token generation failed.'
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Download CSV ──
+  const downloadCSV = (tokens) => {
+    const header = 'Roll Number,Token\n'
+    const rows = tokens.map(t => `${t.roll_number},${t.token}`).join('\n')
+    const blob = new Blob([header + rows], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tokens_${selectedSubject || 'all'}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Print barcode sheet ──
+  const handlePrint = () => {
+    window.print()
+  }
+
+  // Determine which token list to display
+  const displayTokens = activeTab === 'existing' ? existingTokens : generatedTokens
+
+  return (
+    <div className="page-container fade-in">
+      <div className="page-header">
+        <div>
+          <h1>Token Manager</h1>
+          <p>Generate encrypted barcodes for blind grading</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0', marginBottom: '1.5rem', borderBottom: '2px solid var(--border-color)' }}>
+        <button
+          className={`btn ${activeTab === 'generate' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'generate' ? '2px solid var(--color-primary)' : 'none' }}
+          onClick={() => setActiveTab('generate')}
+        >
+          Generate Tokens
+        </button>
+        <button
+          className={`btn ${activeTab === 'existing' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'existing' ? '2px solid var(--color-primary)' : 'none' }}
+          onClick={() => setActiveTab('existing')}
+        >
+          Existing Tokens
+        </button>
+      </div>
+
+      {/* Subject selector */}
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">Subject *</label>
+          {loadingSubjects ? (
+            <LoadingSpinner size={20} />
+          ) : (
+            <select
+              className="form-select"
+              value={selectedSubject}
+              onChange={(e) => { setSelectedSubject(e.target.value); setGeneratedTokens([]); setExistingTokens([]) }}
+              id="subject-select"
+            >
+              <option value="">Select a subject...</option>
+              {subjects.map(s => (
+                <option key={s.id} value={s.id}>{s.subject_code} — {s.subject_name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+
+      {/* Generate Tab Content */}
+      {activeTab === 'generate' && selectedSubject && (
+        <div className="card" style={{ marginBottom: '1.5rem' }}>
+          {/* Input mode toggle */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            <button
+              className={`btn btn-sm ${inputMode === 'manual' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setInputMode('manual')}
+            >
+              Manual Entry
+            </button>
+            <button
+              className={`btn btn-sm ${inputMode === 'file' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setInputMode('file')}
+            >
+              CSV / Excel Upload
+            </button>
+          </div>
+
+          {inputMode === 'manual' ? (
+            <>
+              <div className="form-group">
+                <label className="form-label">Roll Numbers (one per line, or comma-separated)</label>
+                <textarea
+                  className="form-input"
+                  rows={6}
+                  placeholder={"2023CS001\n2023CS002\n2023CS003\n..."}
+                  value={rollNumberText}
+                  onChange={(e) => setRollNumberText(e.target.value)}
+                  style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
+                  id="roll-number-input"
+                />
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={handleParseManual}
+                disabled={!rollNumberText.trim()}
+                id="preview-tokens-btn"
+              >
+                Preview & Generate
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="form-group">
+                <label className="form-label">Upload File (.csv or .xlsx)</label>
+                <div
+                  style={{
+                    border: '2px dashed var(--border-color)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '2rem',
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    background: uploadFile ? 'var(--color-primary-glow)' : 'transparent',
+                    transition: 'all 0.2s',
+                  }}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                    style={{ display: 'none' }}
+                    id="file-upload-input"
+                  />
+                  {uploadFile ? (
+                    <div>
+                      <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📄</div>
+                      <div style={{ fontWeight: 600 }}>{uploadFile.name}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                        {(uploadFile.size / 1024).toFixed(1)} KB — Click to change
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📁</div>
+                      <div style={{ fontWeight: 500 }}>Drop a file here or click to browse</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                        Supports .csv and .xlsx files. Auto-detects roll number column.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={handleFileUpload}
+                disabled={!uploadFile || loading}
+                id="upload-generate-btn"
+              >
+                {loading ? <LoadingSpinner size={18} /> : 'Upload & Generate Tokens'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Preview Modal */}
+      {showPreview && (
+        <div className="modal-backdrop" onClick={() => setShowPreview(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h2>Confirm Token Generation</h2>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowPreview(false)}>✕</button>
+            </div>
+            <div style={{ padding: '1rem', maxHeight: '300px', overflowY: 'auto' }}>
+              <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                {previewRolls.length} roll numbers will be processed. Existing tokens will be reused.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {previewRolls.map((roll, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      background: 'var(--bg-dashboard)',
+                      padding: '0.25rem 0.75rem',
+                      borderRadius: '999px',
+                      fontSize: '0.85rem',
+                      fontFamily: 'monospace',
+                      border: '1px solid var(--border-color)',
+                    }}
+                  >
+                    {roll}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowPreview(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={handleGenerate}
+                disabled={loading}
+                id="confirm-generate-btn"
+              >
+                {loading ? <LoadingSpinner size={16} /> : `Generate ${previewRolls.length} Tokens`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Messages */}
+      {message.text && (
+        <div className={`toast ${message.type === 'error' ? 'toast-error' : 'toast-success'}`} style={{ marginBottom: '1rem' }}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Results Table */}
+      {displayTokens.length > 0 && (
+        <div className="no-print">
+          <div className="flex-between" style={{ marginBottom: '1rem' }}>
+            <h2 style={{ fontSize: 'var(--font-size-xl)' }}>
+              {activeTab === 'existing' ? 'Existing' : 'Generated'} Tokens ({displayTokens.length})
+            </h2>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => downloadCSV(displayTokens)}>
+                📥 Download CSV
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={handlePrint}>
+                🖨️ Print Barcodes
+              </button>
+            </div>
+          </div>
+
+          <div className="table-container" style={{ borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Roll Number</th>
+                  <th>Token</th>
+                  <th>Barcode</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayTokens.map((t, idx) => (
+                  <tr key={idx}>
+                    <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{t.roll_number}</td>
+                    <td style={{ fontFamily: 'monospace', color: 'var(--color-primary-light)' }}>{t.token}</td>
+                    <td><BarcodeLabel token={t.token} /></td>
+                    <td>
+                      {t.is_used ? (
+                        <span className="badge badge-submitted">Scanned</span>
+                      ) : (
+                        <span className="badge badge-open">Unused</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Print-only barcode grid */}
+      {displayTokens.length > 0 && (
+        <div className="print-only" style={{ padding: '1rem' }}>
+          <h2 style={{ textAlign: 'center', marginBottom: '1rem', fontSize: '1.2rem' }}>
+            Barcode Labels — {subjects.find(s => s.id === parseInt(selectedSubject))?.subject_code || 'Subject'}
+          </h2>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '0.5rem',
+          }}>
+            {displayTokens.map((t, idx) => (
+              <div
+                key={idx}
+                style={{
+                  border: '1px solid #ccc',
+                  padding: '0.5rem',
+                  textAlign: 'center',
+                  pageBreakInside: 'avoid',
+                }}
+              >
+                <BarcodeLabel token={t.token} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {activeTab === 'existing' && selectedSubject && existingTokens.length === 0 && !loading && (
+        <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🏷️</div>
+          <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem' }}>No tokens generated yet</h3>
+          <p>Switch to "Generate Tokens" to create barcodes for this subject.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default TokenManager

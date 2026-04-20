@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Subject, MarkingScheme, Bundle, AnswerSheet, AnswerSheetImage
+from .models import Subject, MarkingScheme, Bundle, AnswerSheet, AnswerSheetImage, StudentToken
 
 
 class SubjectSerializer(serializers.ModelSerializer):
@@ -121,14 +121,15 @@ class BundleSerializer(serializers.ModelSerializer):
 class AnswerSheetImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnswerSheetImage
-        fields = ['id', 'bundle', 'roll_number', 'image', 'page_number', 'is_first_page', 'uploaded_at']
-        read_only_fields = ['id', 'uploaded_at', 'roll_number']
+        fields = ['id', 'bundle', 'token', 'image', 'page_number', 'is_first_page', 'uploaded_at']
+        read_only_fields = ['id', 'uploaded_at', 'token']
 
 
 class AnswerSheetSerializer(serializers.ModelSerializer):
     """
     Answer sheet serializer.
-    roll_number is excluded from teacher-facing responses via get_fields().
+    roll_number is excluded from teacher and scanning_staff responses via get_fields().
+    token is always included as the opaque student identifier.
     """
     bundle_number = serializers.CharField(source='bundle.bundle_number', read_only=True)
     subject_code = serializers.CharField(source='bundle.subject.subject_code', read_only=True)
@@ -138,7 +139,7 @@ class AnswerSheetSerializer(serializers.ModelSerializer):
         model = AnswerSheet
         fields = [
             'id', 'bundle', 'bundle_number', 'subject_code',
-            'roll_number', 'pdf_file', 'pdf_version', 'status',
+            'token', 'roll_number', 'pdf_file', 'pdf_version', 'status',
             'assigned_teacher', 'assigned_teacher_name',
             'uploaded_at', 'scanned_by', 'scanned_at',
             'last_flagged_at', 'flag_reason',
@@ -148,7 +149,38 @@ class AnswerSheetSerializer(serializers.ModelSerializer):
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get('request')
-        # Never expose roll_number to teachers
-        if request and hasattr(request.user, 'role') and request.user.role == 'teacher':
+        # Never expose roll_number to teachers or scanning staff
+        if request and hasattr(request.user, 'role') and request.user.role in ('teacher', 'scanning_staff'):
             fields.pop('roll_number', None)
         return fields
+
+
+# ─── Token Serializers ────────────────────────────────────
+
+class StudentTokenBulkInputSerializer(serializers.Serializer):
+    """Input: list of roll numbers + subject_id. Output: list of tokens."""
+    subject_id = serializers.IntegerField()
+    roll_numbers = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        min_length=1,
+        max_length=500
+    )
+
+
+class StudentTokenSerializer(serializers.ModelSerializer):
+    """Read serializer — NEVER exposes roll_number. For non-exam-dept use."""
+    class Meta:
+        model = StudentToken
+        fields = ['id', 'token', 'subject', 'is_used', 'created_at']
+        # roll_number is intentionally excluded
+
+
+class StudentTokenWithRollSerializer(serializers.ModelSerializer):
+    """Full serializer — only used in exam_dept views. Exposes roll_number."""
+    subject_code = serializers.CharField(source='subject.subject_code', read_only=True)
+    subject_name = serializers.CharField(source='subject.subject_name', read_only=True)
+
+    class Meta:
+        model = StudentToken
+        fields = ['id', 'token', 'roll_number', 'subject', 'subject_code', 'subject_name', 'is_used', 'created_at']
+

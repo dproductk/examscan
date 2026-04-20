@@ -21,6 +21,7 @@ function SidebarLayout({ children }) {
         { label: 'Users', path: '/exam/users', icon: '👥' },
         { label: 'Assign Teachers', path: '/exam/assign', icon: '🧑‍🏫' },
         { label: 'Subjects & Schemes', path: '/exam/schemes', icon: '📚' },
+        { label: 'Token Manager', path: '/exam/tokens', icon: '🏷️' },
         { label: 'Reports', path: '/exam/reports', icon: '📊' },
       ];
     } else if (role === 'scanning_staff') {

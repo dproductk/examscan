@@ -42,6 +42,29 @@ class MarkingScheme(models.Model):
         return f"Scheme for {self.subject.subject_code} (Total: {self.total_marks})"
 
 
+class StudentToken(models.Model):
+    """
+    Maps an opaque short token to a real roll number.
+    Only exam_dept and backend logic can access roll_number.
+    Scanning staff and teachers never see this model's data directly.
+    """
+    token = models.CharField(max_length=50, unique=True, db_index=True)
+    roll_number = models.CharField(max_length=50)
+    subject = models.ForeignKey('scanning.Subject', on_delete=models.PROTECT, related_name='student_tokens')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_used = models.BooleanField(default=False)  # True once scanned
+
+    class Meta:
+        db_table = 'student_tokens'
+        unique_together = ('roll_number', 'subject')  # one token per student per subject
+
+    def __str__(self):
+        return f"{self.token} → {self.roll_number}"
+
+
 class Bundle(models.Model):
     """A physical bundle of answer sheets scanned together."""
     STATUS_CHOICES = [
@@ -74,6 +97,7 @@ class AnswerSheetImage(models.Model):
     Temporary storage — cleaned up after finalization.
     """
     bundle = models.ForeignKey(Bundle, on_delete=models.CASCADE, related_name='images')
+    token = models.CharField(max_length=50, blank=True)
     roll_number = models.CharField(max_length=50, blank=True)
     image = models.ImageField(upload_to='scanned_images/')
     page_number = models.PositiveIntegerField()
@@ -82,10 +106,11 @@ class AnswerSheetImage(models.Model):
 
     class Meta:
         db_table = 'answer_sheet_images'
-        ordering = ['roll_number', 'page_number']
+        ordering = ['token', 'page_number']
 
     def __str__(self):
-        return f"Image p{self.page_number} — Roll: {self.roll_number}"
+        return f"Image p{self.page_number} — Token: {self.token}"
+
 
 
 class AnswerSheet(models.Model):
@@ -105,6 +130,7 @@ class AnswerSheet(models.Model):
     ]
 
     bundle = models.ForeignKey(Bundle, on_delete=models.CASCADE, related_name='answer_sheets')
+    token = models.CharField(max_length=50, db_index=True, blank=True, default='')
     roll_number = models.CharField(max_length=50)
     pdf_file = models.FileField(upload_to='answer_sheets/')
     pdf_version = models.PositiveIntegerField(default=1)
@@ -124,8 +150,8 @@ class AnswerSheet(models.Model):
 
     class Meta:
         db_table = 'answer_sheets'
-        unique_together = ('bundle', 'roll_number')
-        ordering = ['roll_number']
+        unique_together = ('bundle', 'token')
+        ordering = ['token']
 
     def __str__(self):
-        return f"Sheet {self.roll_number} — Bundle #{self.bundle.bundle_number}"
+        return f"Sheet {self.token or self.roll_number} — Bundle #{self.bundle.bundle_number}"

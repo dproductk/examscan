@@ -1,3 +1,4 @@
+import io
 import os
 from django.conf import settings
 from django.http import FileResponse, Http404
@@ -12,9 +13,11 @@ from apps.users.permissions import IsScanningStaff, IsTeacher, IsExamDept
 from utils.audit_helper import log_action
 from utils.barcode import detect_barcode
 from utils.pdf_compiler import compile_images_to_pdf
-from .models import Bundle, AnswerSheet, AnswerSheetImage, Subject
+from utils.token_crypto import generate_token
+from .models import Bundle, AnswerSheet, AnswerSheetImage, Subject, StudentToken
 from .serializers import (
     BundleSerializer, AnswerSheetSerializer, AnswerSheetImageSerializer, SubjectSerializer,
+    StudentTokenBulkInputSerializer, StudentTokenWithRollSerializer,
 )
 
 
@@ -204,7 +207,7 @@ class AnswerSheetImageUploadView(APIView):
         image_file = request.FILES.get('image')
         page_number = request.data.get('page_number', 1)
         is_first_page = request.data.get('is_first_page', 'false').lower() == 'true'
-        roll_number = request.data.get('roll_number', '')
+        token = request.data.get('token', '')
 
         if not bundle_id or not image_file:
             return Response(
@@ -220,21 +223,36 @@ class AnswerSheetImageUploadView(APIView):
         if bundle.status == 'submitted':
             return Response({'error': 'Cannot upload to a submitted bundle.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Detect barcode on first page
-        detected_roll = None
+        # Detect barcode on first page — barcode contains the encrypted token
+        detected_token = None
         if is_first_page:
-            detected_roll = detect_barcode(image_file)
+            detected_token = detect_barcode(image_file)
             image_file.seek(0)  # reset pointer after read
-            if not detected_roll:
+            if not detected_token:
                 return Response(
                     {'error': 'Could not detect barcode on the first page.'},
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY
                 )
-            roll_number = detected_roll
+            # Look up the StudentToken to validate it
+            try:
+                student_token = StudentToken.objects.get(
+                    token=detected_token,
+                    subject=bundle.subject
+                )
+            except StudentToken.DoesNotExist:
+                return Response(
+                    {'error': f'Token "{detected_token}" is not registered for subject {bundle.subject.subject_code}. Contact Exam Dept.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Mark token as used
+            student_token.is_used = True
+            student_token.save(update_fields=['is_used'])
+            token = detected_token
 
         sheet_image = AnswerSheetImage.objects.create(
             bundle=bundle,
-            roll_number=roll_number,
+            token=token,
+            roll_number='',  # roll_number never stored in temp images
             image=image_file,
             page_number=int(page_number),
             is_first_page=is_first_page,
@@ -242,13 +260,13 @@ class AnswerSheetImageUploadView(APIView):
 
         log_action(
             request, 'SCAN', 'AnswerSheetImage', sheet_image.pk,
-            new_value={'roll_number': roll_number, 'page_number': int(page_number)},
+            new_value={'token': token, 'page_number': int(page_number)},
             notes=f'Image uploaded for bundle #{bundle.bundle_number}.'
         )
 
         data = AnswerSheetImageSerializer(sheet_image).data
-        if detected_roll:
-            data['detected_roll_number'] = detected_roll
+        if detected_token:
+            data['detected_token'] = detected_token
         return Response(data, status=status.HTTP_201_CREATED)
 
 
@@ -285,17 +303,17 @@ class AnswerSheetImageDeleteView(APIView):
 class AnswerSheetFinalizeView(APIView):
     """
     POST /api/answer-sheets/finalize/
-    Compiles all images for a roll_number within a bundle into a single PDF.
+    Compiles all images for a token within a bundle into a single PDF.
     """
     permission_classes = [IsScanningStaff]
 
     def post(self, request):
         bundle_id = request.data.get('bundle_id')
-        roll_number = request.data.get('roll_number')
+        token = request.data.get('token')
 
-        if not bundle_id or not roll_number:
+        if not bundle_id or not token:
             return Response(
-                {'error': 'bundle_id and roll_number are required.'},
+                {'error': 'bundle_id and token are required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -305,18 +323,26 @@ class AnswerSheetFinalizeView(APIView):
             return Response({'error': 'Bundle not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         images = AnswerSheetImage.objects.filter(
-            bundle=bundle, roll_number=roll_number
+            bundle=bundle, token=token
         ).order_by('page_number')
 
         if not images.exists():
             return Response(
-                {'error': 'No images found for this roll number in the bundle.'},
+                {'error': 'No images found for this token in the bundle.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Compile PDF
+        # Look up the real roll number from StudentToken
+        roll_number = token  # fallback for legacy tokens
+        try:
+            student_token = StudentToken.objects.get(token=token, subject=bundle.subject)
+            roll_number = student_token.roll_number
+        except StudentToken.DoesNotExist:
+            pass  # Legacy token — use token as roll_number directly
+
+        # Compile PDF — filename uses token, not roll number
         image_paths = [img.image.path for img in images]
-        pdf_rel_path = f'answer_sheets/bundle_{bundle_id}/{roll_number}.pdf'
+        pdf_rel_path = f'answer_sheets/bundle_{bundle_id}/{token}.pdf'
         pdf_abs_path = os.path.join(settings.MEDIA_ROOT, pdf_rel_path)
 
         try:
@@ -327,8 +353,9 @@ class AnswerSheetFinalizeView(APIView):
         # Create or update AnswerSheet record
         answer_sheet, created = AnswerSheet.objects.update_or_create(
             bundle=bundle,
-            roll_number=roll_number,
+            token=token,
             defaults={
+                'roll_number': roll_number,
                 'pdf_file': pdf_rel_path,
                 'scanned_by': request.user,
                 'status': 'pending',
@@ -351,8 +378,8 @@ class AnswerSheetFinalizeView(APIView):
 
         log_action(
             request, 'SCAN', 'AnswerSheet', answer_sheet.pk,
-            new_value={'roll_number': roll_number, 'pdf_version': answer_sheet.pdf_version},
-            notes=f'Answer sheet finalized for roll {roll_number}. {deleted_count} raw images cleaned up.'
+            new_value={'token': token, 'pdf_version': answer_sheet.pdf_version},
+            notes=f'Answer sheet finalized for token {token}. {deleted_count} raw images cleaned up.'
         )
 
         return Response(
@@ -531,3 +558,189 @@ class AnswerSheetPDFView(APIView):
         response = FileResponse(open(file_path, 'rb'), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="sheet_{pk}.pdf"'
         return response
+
+
+# ─────────────────────────────────────────────────────────
+# Token Management Views (Exam Dept Only)
+# ─────────────────────────────────────────────────────────
+
+class GenerateStudentTokensView(APIView):
+    """
+    POST /api/tokens/generate/
+    Exam Dept only.
+    Accepts: { subject_id: int, roll_numbers: ["2023CS001", "2023CS002", ...] }
+    Returns: [ { token: "XK729FAB", roll_number: "2023CS001" }, ... ]
+    Skips duplicates silently (returns existing token for that student+subject).
+    """
+    permission_classes = [IsExamDept]
+
+    def post(self, request):
+        serializer = StudentTokenBulkInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        subject_id = serializer.validated_data['subject_id']
+        roll_numbers = serializer.validated_data['roll_numbers']
+
+        try:
+            subject = Subject.objects.get(id=subject_id)
+        except Subject.DoesNotExist:
+            return Response({'error': 'Subject not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        result = []
+        for roll in roll_numbers:
+            roll = roll.strip()
+            if not roll:
+                continue
+            obj, created = StudentToken.objects.get_or_create(
+                roll_number=roll,
+                subject=subject,
+                defaults={
+                    'token': generate_token(roll),
+                    'created_by': request.user,
+                }
+            )
+            result.append({'token': obj.token, 'roll_number': roll})
+
+        log_action(request, 'SCAN', 'StudentToken', subject_id,
+                   notes=f"Generated {len(result)} tokens for subject {subject.subject_code}")
+
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class ListStudentTokensView(APIView):
+    """
+    GET /api/tokens/?subject_id=&is_used=
+    Exam Dept only.
+    Returns token list WITH roll_numbers (for printing barcodes and report mapping).
+    """
+    permission_classes = [IsExamDept]
+
+    def get(self, request):
+        qs = StudentToken.objects.select_related('subject')
+        subject_id = request.query_params.get('subject_id')
+        is_used = request.query_params.get('is_used')
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+        if is_used is not None:
+            qs = qs.filter(is_used=is_used.lower() == 'true')
+        serializer = StudentTokenWithRollSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class TokenFileUploadView(APIView):
+    """
+    POST /api/tokens/upload/
+    Exam Dept only.
+    Accepts: multipart file (CSV or .xlsx) + subject_id
+    Parses file, auto-detects roll number column, generates tokens.
+    Returns: [ { token: "...", roll_number: "..." }, ... ]
+    """
+    permission_classes = [IsExamDept]
+    parser_classes = [MultiPartParser]
+
+    ROLL_COLUMN_HINTS = [
+        'roll_number', 'roll_no', 'rollnumber', 'rollno',
+        'roll', 'enrollment', 'enroll_no', 'reg_no',
+        'registration_number', 'student_id', 'usn', 'prn',
+    ]
+
+    def _detect_column(self, headers):
+        """Auto-detect the roll number column from headers."""
+        for hint in self.ROLL_COLUMN_HINTS:
+            for idx, header in enumerate(headers):
+                if header.strip().lower().replace(' ', '_') == hint:
+                    return idx
+        return 0  # fallback to first column
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        subject_id = request.data.get('subject_id')
+
+        if not file or not subject_id:
+            return Response(
+                {'error': 'file and subject_id are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            subject = Subject.objects.get(id=int(subject_id))
+        except (Subject.DoesNotExist, ValueError):
+            return Response({'error': 'Subject not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Parse file
+        filename = file.name.lower()
+        roll_numbers = []
+
+        try:
+            if filename.endswith('.csv'):
+                import csv
+                content = file.read().decode('utf-8-sig')
+                reader = csv.reader(io.StringIO(content))
+                rows = list(reader)
+                if not rows:
+                    return Response({'error': 'File is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                col_idx = self._detect_column(rows[0])
+                for row in rows[1:]:  # skip header
+                    if col_idx < len(row):
+                        val = row[col_idx].strip()
+                        if val:
+                            roll_numbers.append(val)
+
+            elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+                import openpyxl
+                wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+                ws = wb.active
+                rows = list(ws.iter_rows(values_only=True))
+                if not rows:
+                    return Response({'error': 'File is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                headers = [str(h or '').strip() for h in rows[0]]
+                col_idx = self._detect_column(headers)
+                for row in rows[1:]:
+                    if col_idx < len(row) and row[col_idx] is not None:
+                        val = str(row[col_idx]).strip()
+                        if val:
+                            roll_numbers.append(val)
+
+            else:
+                return Response(
+                    {'error': 'Unsupported file format. Use .csv or .xlsx.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to parse file: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Deduplicate
+        roll_numbers = list(dict.fromkeys(roll_numbers))
+
+        if not roll_numbers:
+            return Response(
+                {'error': 'No valid roll numbers found in the file.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Generate tokens
+        result = []
+        for roll in roll_numbers:
+            obj, created = StudentToken.objects.get_or_create(
+                roll_number=roll,
+                subject=subject,
+                defaults={
+                    'token': generate_token(roll),
+                    'created_by': request.user,
+                }
+            )
+            result.append({'token': obj.token, 'roll_number': roll})
+
+        log_action(request, 'SCAN', 'StudentToken', subject.id,
+                   notes=f"File upload: generated {len(result)} tokens for {subject.subject_code} from {file.name}")
+
+        return Response({
+            'tokens': result,
+            'count': len(result),
+            'source_file': file.name,
+        }, status=status.HTTP_201_CREATED)

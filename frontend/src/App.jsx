@@ -20,6 +20,7 @@ import SchemeManager from './pages/examdept/SchemeManager'
 import AmendmentManager from './pages/examdept/AmendmentManager'
 import AuditLog from './pages/examdept/AuditLog'
 import Reports from './pages/examdept/Reports'
+import TokenManager from './pages/examdept/TokenManager'
 import UserManagement from './pages/examdept/UserManagement'
 
 function App() {
@@ -129,6 +130,14 @@ function App() {
         element={
           <ProtectedRoute allowedRole="exam_dept">
             <Reports />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/exam/tokens"
+        element={
+          <ProtectedRoute allowedRole="exam_dept">
+            <TokenManager />
           </ProtectedRoute>
         }
       />
