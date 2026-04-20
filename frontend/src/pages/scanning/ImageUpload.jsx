@@ -185,9 +185,9 @@ function ImageUpload() {
               <button 
                 className={`btn ${isScanningComplete ? 'btn-secondary' : 'btn-primary'}`}
                 style={{ opacity: isScanningComplete ? 1 : 0.5, pointerEvents: isScanningComplete ? 'auto' : 'none' }}
-                onClick={() => navigate(`/scanning/review/${bundleId}`)}
+                onClick={() => navigate(`/scan/submit/${bundleId}`)}
               >
-                {isScanningComplete ? "Finalize Bundle →" : "Scanning Required"}
+                {isScanningComplete ? "Review & Submit →" : "Scanning Required"}
               </button>
             </div>
           )}

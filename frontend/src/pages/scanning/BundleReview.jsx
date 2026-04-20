@@ -170,11 +170,11 @@ function BundleReview() {
             {bundle?.status !== 'submitted' && (
               <button
                 className="btn btn-success btn-lg"
-                onClick={handleSubmit}
-                disabled={submitting || sheets.length === 0}
+                onClick={() => navigate(`/scan/submit/${bundleId}`)}
+                disabled={sheets.length === 0}
                 id="submit-bundle-btn"
               >
-                {submitting ? <LoadingSpinner size={20} /> : 'Submit Bundle'}
+                Review &amp; Submit Bundle
               </button>
             )}
           </div>

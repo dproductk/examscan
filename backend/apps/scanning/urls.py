@@ -3,6 +3,7 @@ from .views import (
     BundleCreateView, BundleListView, BundleDetailView, BundleSubmitView,
     SubjectListCreateView, BundleAssignView,
     GenerateStudentTokensView, ListStudentTokensView, TokenFileUploadView,
+    BundleQualityCheckView,
 )
 
 urlpatterns = [
@@ -17,4 +18,7 @@ urlpatterns = [
     path('tokens/generate/', GenerateStudentTokensView.as_view(), name='generate-tokens'),
     path('tokens/upload/', TokenFileUploadView.as_view(), name='upload-tokens'),
     path('tokens/', ListStudentTokensView.as_view(), name='list-tokens'),
+
+    # Quality check (Scanning Staff)
+    path('<int:bundle_id>/quality-check/', BundleQualityCheckView.as_view(), name='bundle-quality-check'),
 ]

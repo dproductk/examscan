@@ -6,21 +6,30 @@ import LoadingSpinner from '../../components/LoadingSpinner'
 import JsBarcode from 'jsbarcode'
 
 // ── Barcode Label Component ──────────────────────────────
-function BarcodeLabel({ token }) {
+function BarcodeLabel({ token, width = 1.6, height = 50 }) {
   const svgRef = useRef()
   useEffect(() => {
     if (svgRef.current && token) {
       JsBarcode(svgRef.current, token, {
         format: 'CODE128',
-        width: 1.5,
-        height: 40,
-        displayValue: true,
-        fontSize: 11,
-        margin: 4,
+        width: width,
+        height: height,
+        displayValue: false,
+        margin: 0,
       })
     }
-  }, [token])
-  return <svg ref={svgRef} />
+  }, [token, width, height])
+  
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div style={{ maxWidth: '450px', width: '100%', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
+        <svg ref={svgRef} style={{ width: '100%', height: 'auto' }} />
+      </div>
+      <div style={{ fontSize: '13px', fontFamily: 'monospace', marginTop: '6px', letterSpacing: '1px' }}>
+        {token}
+      </div>
+    </div>
+  )
 }
 
 function TokenManager() {
@@ -388,7 +397,7 @@ function TokenManager() {
                 📥 Download CSV
               </button>
               <button className="btn btn-primary btn-sm" onClick={handlePrint}>
-                🖨️ Print Barcodes
+                🖨️ Print / Download PDF
               </button>
             </div>
           </div>
@@ -426,31 +435,49 @@ function TokenManager() {
         </div>
       )}
 
-      {/* Print-only barcode grid */}
+      {/* Print-only barcode table */}
       {displayTokens.length > 0 && (
-        <div className="print-only" style={{ padding: '1rem' }}>
-          <h2 style={{ textAlign: 'center', marginBottom: '1rem', fontSize: '1.2rem' }}>
-            Barcode Labels — {subjects.find(s => s.id === parseInt(selectedSubject))?.subject_code || 'Subject'}
+        <div className="print-only" style={{ padding: '2rem' }}>
+          <h2 style={{ textAlign: 'center', marginBottom: '2rem', fontSize: '1.5rem', fontWeight: 'bold' }}>
+            Barcode List — {subjects.find(s => s.id === parseInt(selectedSubject))?.subject_code || 'Subject'}
           </h2>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: '0.5rem',
+          <table style={{ 
+            width: '100%', 
+            borderCollapse: 'collapse',
+            margin: '0 auto',
+            maxWidth: '800px'
           }}>
-            {displayTokens.map((t, idx) => (
-              <div
-                key={idx}
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '0.5rem',
-                  textAlign: 'center',
-                  pageBreakInside: 'avoid',
-                }}
-              >
-                <BarcodeLabel token={t.token} />
-              </div>
-            ))}
-          </div>
+            <thead>
+              <tr>
+                <th style={{ border: '2px solid #000', padding: '12px', textAlign: 'left', width: '30%', fontSize: '1.1rem' }}>Roll Number</th>
+                <th style={{ border: '2px solid #000', padding: '12px', textAlign: 'center', fontSize: '1.1rem' }}>Barcode Label</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayTokens.map((t, idx) => (
+                <tr key={idx} style={{ pageBreakInside: 'avoid' }}>
+                  <td style={{ 
+                    border: '2px solid #000', 
+                    padding: '12px', 
+                    fontFamily: 'monospace', 
+                    fontSize: '1.25rem', 
+                    fontWeight: 'bold',
+                    verticalAlign: 'middle'
+                  }}>
+                    {t.roll_number}
+                  </td>
+                  <td style={{ 
+                    border: '2px solid #000', 
+                    padding: '16px 12px', 
+                    textAlign: 'center',
+                    verticalAlign: 'middle'
+                  }}>
+                    <BarcodeLabel token={t.token} width={2} height={60} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

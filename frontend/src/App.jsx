@@ -6,6 +6,7 @@ import ScanLogin from './pages/scanning/ScanLogin'
 import SessionCreate from './pages/scanning/SessionCreate'
 import ImageUpload from './pages/scanning/ImageUpload'
 import BundleReview from './pages/scanning/BundleReview'
+import ReviewScreen from './pages/scanning/ReviewScreen'
 
 // Teacher portal
 import TeacherLogin from './pages/teacher/TeacherLogin'
@@ -52,6 +53,14 @@ function App() {
         element={
           <ProtectedRoute allowedRole="scanning_staff">
             <BundleReview />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/scan/submit/:bundleId"
+        element={
+          <ProtectedRoute allowedRole="scanning_staff">
+            <ReviewScreen />
           </ProtectedRoute>
         }
       />

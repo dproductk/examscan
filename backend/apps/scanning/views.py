@@ -744,3 +744,212 @@ class TokenFileUploadView(APIView):
             'count': len(result),
             'source_file': file.name,
         }, status=status.HTTP_201_CREATED)
+
+
+# ─────────────────────────────────────────────────────────
+# Quality Check Views (Scanning Staff)
+# ─────────────────────────────────────────────────────────
+
+class BundleQualityCheckView(APIView):
+    """
+    GET /api/bundles/{bundle_id}/quality-check/
+
+    Scanning staff only. Runs Laplacian blur detection on all finalized
+    AnswerSheet PDFs in the bundle. Returns per-sheet quality results
+    so the frontend can highlight bad pages before final submission.
+
+    Response:
+    {
+        "bundle_id": 23,
+        "total_sheets": 5,
+        "flagged_count": 1,
+        "results": [
+            {
+                "sheet_id": 101,
+                "token": "XK729FAB",
+                "is_blurry": false,
+                "score": 142.5,
+                "thumbnail_url": "/api/answer-sheets/101/thumbnail/"
+            }, ...
+        ]
+    }
+    """
+    permission_classes = [IsScanningStaff]
+
+    def get(self, request, bundle_id):
+        try:
+            bundle = Bundle.objects.get(id=bundle_id)
+        except Bundle.DoesNotExist:
+            return Response({'error': 'Bundle not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        sheets = AnswerSheet.objects.filter(bundle=bundle).order_by('token')
+        if not sheets.exists():
+            return Response({'error': 'No answer sheets found for this bundle.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from utils.blur_detector import check_answer_sheet_quality
+
+        results = []
+        for sheet in sheets:
+            quality = check_answer_sheet_quality(sheet)
+            results.append({
+                'sheet_id': sheet.id,
+                'token': sheet.token,
+                'is_blurry': quality['is_blurry'],
+                'score': quality['score'],
+                'thumbnail_url': f'/api/answer-sheets/{sheet.id}/thumbnail/',
+            })
+
+        flagged_count = sum(1 for r in results if r['is_blurry'])
+
+        log_action(
+            request, 'SCAN', 'Bundle', bundle_id,
+            notes=f"Quality check run: {flagged_count} blurry sheets out of {len(results)}"
+        )
+
+        return Response({
+            'bundle_id': bundle_id,
+            'total_sheets': len(results),
+            'flagged_count': flagged_count,
+            'results': results,
+        })
+
+
+class AnswerSheetThumbnailView(APIView):
+    """
+    GET /api/answer-sheets/{pk}/thumbnail/
+
+    Returns a JPEG thumbnail (max 400px wide) of the first page of the
+    answer sheet PDF. Used by the review screen thumbnail strip.
+    Scanning staff and teachers can view.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            sheet = AnswerSheet.objects.get(pk=pk)
+        except AnswerSheet.DoesNotExist:
+            from django.http import Http404
+            raise Http404
+
+        # Role check: scanning staff see all; teachers see only assigned
+        if request.user.role == 'teacher' and sheet.assigned_teacher != request.user:
+            return Response({'error': 'Not authorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            from PIL import Image as PILImage
+            import fitz  # PyMuPDF — fast PDF renderer
+
+            doc = fitz.open(sheet.pdf_file.path)
+            page = doc[0]
+            # Render at 1.5x for decent quality thumbnail
+            mat = fitz.Matrix(1.5, 1.5)
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("jpeg")
+            doc.close()
+            from django.http import HttpResponse
+            return HttpResponse(img_data, content_type='image/jpeg')
+
+        except ImportError:
+            # PyMuPDF not available — fall back to Pillow JPEG extraction
+            pass
+        except Exception:
+            pass
+
+        # Pillow fallback — works for image-only PDFs
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(sheet.pdf_file.path) as img:
+                img.thumbnail((400, 600))
+                buf = io.BytesIO()
+                img.save(buf, format='JPEG', quality=80)
+                buf.seek(0)
+                from django.http import HttpResponse
+                return HttpResponse(buf.read(), content_type='image/jpeg')
+        except Exception:
+            pass
+
+        # Last resort: return a 1x1 placeholder so the UI doesn't break
+        from django.http import HttpResponse
+        import base64
+        # 1x1 grey JPEG
+        placeholder = base64.b64decode(
+            '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U'
+            'HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgN'
+            'DRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy'
+            'MjL/wAARCAABAAEDASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIRAAAg'
+            'IBBQEAAAAAAAAAAAAAAQIDBAUREiExUf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEA'
+            'AAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwABr3QAAAAASUVORK5CYII='
+        )
+        return HttpResponse(placeholder, content_type='image/jpeg')
+
+
+class AnswerSheetReplaceImageView(APIView):
+    """
+    POST /api/answer-sheets/{pk}/replace-image/
+
+    Scanning staff only. Accepts a new set of page images for a given answer
+    sheet, recompiles the PDF, and runs a fresh quality check.
+
+    Body: multipart — { images: File[] }   (one or more pages in order)
+    OR:   multipart — { image: File }       (single replacement page 1)
+
+    Response: { sheet_id, token, quality: { is_blurry, score } }
+    """
+    permission_classes = [IsScanningStaff]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request, pk):
+        try:
+            sheet = AnswerSheet.objects.get(pk=pk)
+        except AnswerSheet.DoesNotExist:
+            return Response({'error': 'Answer sheet not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if sheet.bundle.status == 'submitted':
+            return Response({'error': 'Cannot replace images in a submitted bundle.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Accept one or more images
+        image_files = request.FILES.getlist('images') or (
+            [request.FILES['image']] if 'image' in request.FILES else []
+        )
+        if not image_files:
+            return Response({'error': 'No images provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save temp files and recompile PDF
+        import tempfile, shutil
+        temp_dir = tempfile.mkdtemp()
+        try:
+            temp_paths = []
+            for i, f in enumerate(image_files):
+                ext = os.path.splitext(f.name)[1] or '.jpg'
+                tmp_path = os.path.join(temp_dir, f'page_{i+1:03d}{ext}')
+                with open(tmp_path, 'wb') as out:
+                    for chunk in f.chunks():
+                        out.write(chunk)
+                temp_paths.append(tmp_path)
+
+            # Recompile PDF
+            pdf_rel_path = sheet.pdf_file.name
+            pdf_abs_path = sheet.pdf_file.path
+            os.makedirs(os.path.dirname(pdf_abs_path), exist_ok=True)
+
+            compile_images_to_pdf(temp_paths, pdf_abs_path)
+            sheet.pdf_version += 1
+            sheet.save(update_fields=['pdf_version'])
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        # Quality check on new PDF
+        from utils.blur_detector import check_answer_sheet_quality
+        quality = check_answer_sheet_quality(sheet)
+
+        log_action(
+            request, 'SCAN', 'AnswerSheet', pk,
+            notes=f"Images re-uploaded for token {sheet.token}. New quality score: {quality['score']}"
+        )
+
+        return Response({
+            'sheet_id': sheet.id,
+            'token': sheet.token,
+            'thumbnail_url': f'/api/answer-sheets/{sheet.id}/thumbnail/',
+            'quality': quality,
+        })
