@@ -147,6 +147,7 @@ class AnswerSheet(models.Model):
     scanned_at = models.DateTimeField(auto_now_add=True)
     last_flagged_at = models.DateTimeField(null=True, blank=True)
     flag_reason = models.CharField(max_length=50, choices=FLAG_REASON_CHOICES, null=True, blank=True)
+    quality_score = models.FloatField(null=True, blank=True, help_text="Lowest Laplacian variance score across pages")
 
     class Meta:
         db_table = 'answer_sheets'

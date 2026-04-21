@@ -264,9 +264,18 @@ class AnswerSheetImageUploadView(APIView):
             notes=f'Image uploaded for bundle #{bundle.bundle_number}.'
         )
 
+        # Immediate quality check for the frontend
+        from utils.blur_detector import check_image_quality
+        quality = check_image_quality(sheet_image.image.path)
+
         data = AnswerSheetImageSerializer(sheet_image).data
+        data['is_blurry'] = quality.get('is_blurry', False)
+        data['is_low_quality'] = quality.get('is_low_quality', False)
+        data['quality_score'] = quality['score']
+
         if detected_token:
             data['detected_token'] = detected_token
+            
         return Response(data, status=status.HTTP_201_CREATED)
 
 
@@ -350,6 +359,10 @@ class AnswerSheetFinalizeView(APIView):
         except RuntimeError as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        # Calculate sharpness of the compiled PDF
+        from utils.blur_detector import check_pdf_quality
+        quality_info = check_pdf_quality(pdf_abs_path)
+
         # Create or update AnswerSheet record
         answer_sheet, created = AnswerSheet.objects.update_or_create(
             bundle=bundle,
@@ -359,6 +372,7 @@ class AnswerSheetFinalizeView(APIView):
                 'pdf_file': pdf_rel_path,
                 'scanned_by': request.user,
                 'status': 'pending',
+                'quality_score': quality_info.get('score'),
             }
         )
         if not created:

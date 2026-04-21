@@ -57,7 +57,12 @@ function TokenManager() {
   const [message, setMessage] = useState({ type: '', text: '' })
 
   // Tab for viewing existing vs generated
-  const [activeTab, setActiveTab] = useState('generate') // 'generate' | 'existing'
+  const [activeTab, setActiveTab] = useState('generate') // 'generate' | 'existing' | 'bundle'
+  
+  // Bundle Barcode State
+  const [bundleNumber, setBundleNumber] = useState('')
+  const [totalSheets, setTotalSheets] = useState('')
+  const [bundleBarcodeData, setBundleBarcodeData] = useState('')
 
   useEffect(() => {
     fetchSubjects()
@@ -183,6 +188,23 @@ function TokenManager() {
     window.print()
   }
 
+  // ── Generate Bundle Barcode ──
+  const handleGenerateBundleBarcode = () => {
+    if (!selectedSubject || !bundleNumber || !totalSheets) {
+      setMessage({ type: 'error', text: 'Please fill all bundle fields.' })
+      return
+    }
+    const randomHash = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const jsonData = JSON.stringify({
+      s: parseInt(selectedSubject),
+      b: bundleNumber,
+      c: parseInt(totalSheets),
+      q: randomHash
+    })
+    setBundleBarcodeData(jsonData)
+    setMessage({ type: 'success', text: 'Bundle barcode generated!' })
+  }
+
   // Determine which token list to display
   const displayTokens = activeTab === 'existing' ? existingTokens : generatedTokens
 
@@ -196,7 +218,7 @@ function TokenManager() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '1.5rem', borderBottom: '2px solid var(--border-color)' }}>
+      <div className="no-print" style={{ display: 'flex', gap: '0', marginBottom: '1.5rem', borderBottom: '2px solid var(--border-color)' }}>
         <button
           className={`btn ${activeTab === 'generate' ? 'btn-primary' : 'btn-ghost'}`}
           style={{ borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'generate' ? '2px solid var(--color-primary)' : 'none' }}
@@ -211,10 +233,17 @@ function TokenManager() {
         >
           Existing Tokens
         </button>
+        <button
+          className={`btn ${activeTab === 'bundle' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'bundle' ? '2px solid var(--color-primary)' : 'none' }}
+          onClick={() => setActiveTab('bundle')}
+        >
+          Bundle Barcode
+        </button>
       </div>
 
       {/* Subject selector */}
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="card no-print" style={{ marginBottom: '1.5rem' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Subject *</label>
           {loadingSubjects ? (
@@ -237,7 +266,7 @@ function TokenManager() {
 
       {/* Generate Tab Content */}
       {activeTab === 'generate' && selectedSubject && (
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div className="card no-print" style={{ marginBottom: '1.5rem' }}>
           {/* Input mode toggle */}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <button
@@ -378,6 +407,50 @@ function TokenManager() {
         </div>
       )}
 
+      {/* Bundle Tab Content */}
+      {activeTab === 'bundle' && selectedSubject && (
+        <div className="card no-print" style={{ marginBottom: '1.5rem' }}>
+          <h3>Generate Bundle Barcode</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+            Generate a barcode to stick onto the bundle cover. Scanning staff can scan this barcode to instantly set up the bundle session attributes without manual typing, eliminating errors.
+          </p>
+
+          <div className="grid-2">
+            <div className="form-group">
+              <label className="form-label" htmlFor="bundle-number">Bundle Number</label>
+              <input
+                id="bundle-number"
+                type="text"
+                className="form-input"
+                value={bundleNumber}
+                onChange={(e) => setBundleNumber(e.target.value)}
+                placeholder="e.g., B-2024-CS101-001"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="total-sheets">Total Sheets in Bundle</label>
+              <input
+                id="total-sheets"
+                type="number"
+                className="form-input"
+                min={1}
+                value={totalSheets}
+                onChange={(e) => setTotalSheets(e.target.value)}
+                placeholder="e.g. 50"
+              />
+            </div>
+          </div>
+
+          <button
+            className="btn btn-primary"
+            onClick={handleGenerateBundleBarcode}
+            disabled={!bundleNumber || !totalSheets}
+          >
+            Generate Barcode
+          </button>
+        </div>
+      )}
+
       {/* Messages */}
       {message.text && (
         <div className={`toast ${message.type === 'error' ? 'toast-error' : 'toast-success'}`} style={{ marginBottom: '1rem' }}>
@@ -489,6 +562,33 @@ function TokenManager() {
           <p>Switch to "Generate Tokens" to create barcodes for this subject.</p>
         </div>
       )}
+      {/* Bundle Barcode Print Sheet */}
+      {activeTab === 'bundle' && bundleBarcodeData && (
+        <div className="print-only print-sheet bundle-print-sheet" style={{ display: 'none' }}>
+           <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+               <h2>{subjects.find(s => s.id === parseInt(selectedSubject))?.subject_code} — Bundle Record</h2>
+               <h3>Bundle: {bundleNumber} ({totalSheets} Sheets)</h3>
+           </div>
+           
+           <div style={{ border: '2px solid #000', padding: '2rem', display: 'flex', justifyContent: 'center' }}>
+               <BarcodeLabel token={bundleBarcodeData} width={2} height={100} />
+           </div>
+        </div>
+      )}
+
+      {/* Bundle UI Results (Screen Only) */}
+      {activeTab === 'bundle' && bundleBarcodeData && (
+        <div className="no-print card" style={{ textAlign: 'center' }}>
+           <h3 style={{ marginBottom: '1rem' }}>Generated Bundle Barcode</h3>
+           <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '2rem', display: 'inline-block', backgroundColor: '#fff', color: '#000', marginBottom: '1rem' }}>
+              <BarcodeLabel token={bundleBarcodeData} width={1.8} height={80} />
+           </div>
+           <div>
+               <button className="btn btn-primary btn-lg" onClick={handlePrint}>🖨️ Print Bundle Label</button>
+           </div>
+        </div>
+      )}
+
     </div>
   )
 }

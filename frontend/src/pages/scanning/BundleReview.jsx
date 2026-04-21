@@ -120,8 +120,9 @@ function BundleReview() {
             <thead>
               <tr>
                 <th>#</th>
-                <th>Roll Number</th>
+                <th>Student Code</th>
                 <th>Status</th>
+                <th>Sharpness Score</th>
                 <th>PDF Version</th>
                 <th>Scanned At</th>
               </tr>
@@ -130,8 +131,11 @@ function BundleReview() {
               {sheets.map((sheet, idx) => (
                 <tr key={sheet.id}>
                   <td>{idx + 1}</td>
-                  <td style={{ fontWeight: 600 }}>{sheet.roll_number}</td>
+                  <td style={{ fontWeight: 600, fontFamily: 'monospace' }}>{sheet.token}</td>
                   <td><StatusBadge status={sheet.status} /></td>
+                  <td style={{ fontWeight: 500, color: sheet.quality_score && sheet.quality_score < 80 ? 'var(--color-danger)' : sheet.quality_score && sheet.quality_score < 500 ? 'var(--color-warning)' : 'inherit' }}>
+                    {sheet.quality_score ? sheet.quality_score.toFixed(1) : 'N/A'}
+                  </td>
                   <td>v{sheet.pdf_version}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
                     {new Date(sheet.scanned_at).toLocaleString()}
@@ -140,7 +144,7 @@ function BundleReview() {
               ))}
               {sheets.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                     No sheets scanned yet.
                   </td>
                 </tr>
@@ -170,11 +174,11 @@ function BundleReview() {
             {bundle?.status !== 'submitted' && (
               <button
                 className="btn btn-success btn-lg"
-                onClick={() => navigate(`/scan/submit/${bundleId}`)}
-                disabled={sheets.length === 0}
+                onClick={handleSubmit}
+                disabled={submitting || sheets.length === 0}
                 id="submit-bundle-btn"
               >
-                Review &amp; Submit Bundle
+                {submitting ? <LoadingSpinner size={20} /> : 'Submit Bundle'}
               </button>
             )}
           </div>

@@ -54,7 +54,21 @@ function SessionCreate() {
 
   const handleScan = (result) => {
     if (result && result.length > 0) {
-      setQrRawData(result[0].rawValue)
+      const rawText = result[0].rawValue;
+      try {
+        const parsed = JSON.parse(rawText);
+        setQrRawData(parsed.q || rawText);
+        if (parsed.s) {
+          setSubjectId(parsed.s);
+          // Try to auto-select department if subject is found
+          const subjectObj = subjects.find(sub => sub.id === parseInt(parsed.s));
+          if (subjectObj && subjectObj.department) setDepartmentFilter(subjectObj.department);
+        }
+        if (parsed.b) setBundleNumber(parsed.b);
+        if (parsed.c) setTotalSheets(parsed.c);
+      } catch (e) {
+        setQrRawData(rawText);
+      }
       setShowCamera(false)
       setShowManualForm(true) // auto-advance to form with QR data pre-filled
     }
@@ -127,9 +141,9 @@ function SessionCreate() {
       {/* Main Scan Area */}
       <div className="card" style={{ marginBottom: '2rem' }}>
         <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{color: 'var(--color-secondary)'}}>▣</span> Scan Bundle QR Code
+          <span style={{color: 'var(--color-secondary)'}}>▣</span> Scan Bundle Barcode
         </h3>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Open the camera and point it at the printed QR code on the front of the bundle cover.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Open the camera and point it at the printed Barcode on the front of the bundle cover.</p>
         
         {!showManualForm && !showCamera ? (
            <div style={{ textAlign: 'center' }}>
@@ -143,7 +157,7 @@ function SessionCreate() {
         ) : showCamera ? (
            <div className="fade-in">
              <div style={{ maxWidth: '400px', margin: '0 auto', borderRadius: '12px', overflow: 'hidden' }}>
-               <Scanner onScan={handleScan} />
+               <Scanner onScan={handleScan} formats={['qr_code', 'code_128', 'code_39']} />
              </div>
              <div style={{ textAlign: 'center', marginTop: '1rem' }}>
                <button className="btn btn-secondary" onClick={() => setShowCamera(false)}>Cancel Scan</button>

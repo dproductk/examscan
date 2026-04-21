@@ -15,6 +15,7 @@ import numpy as np
 from decouple import config
 
 BLUR_THRESHOLD = float(config('BLUR_THRESHOLD', default=80.0))
+WARNING_THRESHOLD = float(config('WARNING_THRESHOLD', default=500.0))
 
 
 def check_image_quality(image_path: str) -> dict:
@@ -26,20 +27,31 @@ def check_image_quality(image_path: str) -> dict:
 
     Returns:
         {
-            "is_blurry": bool,     # True if quality is below threshold
+            "is_blurry": bool,     # True if quality is below BLUR_THRESHOLD
+            "is_low_quality": bool,# True if quality is below WARNING_THRESHOLD (but not blurry)
             "score": float,        # Laplacian variance (higher = sharper)
-            "threshold": float     # Threshold used
+            "threshold": float,    # Threshold used
+            "warning_threshold": float
         }
     """
     img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if img is None:
-        return {"is_blurry": True, "score": 0.0, "threshold": BLUR_THRESHOLD}
+        return {
+            "is_blurry": True, 
+            "is_low_quality": False, 
+            "score": 0.0, 
+            "threshold": BLUR_THRESHOLD,
+            "warning_threshold": WARNING_THRESHOLD
+        }
 
     variance = cv2.Laplacian(img, cv2.CV_64F).var()
+    score = float(variance)
     return {
-        "is_blurry": float(variance) < BLUR_THRESHOLD,
-        "score": round(float(variance), 2),
+        "is_blurry": score < BLUR_THRESHOLD,
+        "is_low_quality": BLUR_THRESHOLD <= score < WARNING_THRESHOLD,
+        "score": round(score, 2),
         "threshold": BLUR_THRESHOLD,
+        "warning_threshold": WARNING_THRESHOLD,
     }
 
 
@@ -60,22 +72,42 @@ def check_pdf_quality(pdf_path: str) -> dict:
     try:
         # Try pdf2image first (best quality)
         from pdf2image import convert_from_path
-        pages = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=100)
+        pages = convert_from_path(str(pdf_path), dpi=100)
         if pages:
             import numpy as np
             import cv2
-            img_array = np.array(pages[0].convert('L'))  # grayscale
-            variance = cv2.Laplacian(img_array, cv2.CV_64F).var()
+            worst_score = float('inf')
+            is_blurry = False
+            is_low_quality = False
+            for p in pages:
+                img_array = np.array(p.convert('L'))  # grayscale
+                variance = cv2.Laplacian(img_array, cv2.CV_64F).var()
+                score = float(variance)
+                if score < worst_score:
+                    worst_score = score
+                if score < BLUR_THRESHOLD:
+                    is_blurry = True
+                elif score < WARNING_THRESHOLD:
+                    is_low_quality = True
+
             return {
-                "is_blurry": float(variance) < BLUR_THRESHOLD,
-                "score": round(float(variance), 2),
+                "is_blurry": is_blurry,
+                "is_low_quality": is_low_quality,
+                "score": round(worst_score, 2) if worst_score != float('inf') else 999.0,
                 "threshold": BLUR_THRESHOLD,
+                "warning_threshold": WARNING_THRESHOLD,
             }
     except Exception:
         pass
 
     # Fallback: treat as not blurry (digital PDF)
-    return {"is_blurry": False, "score": 999.0, "threshold": BLUR_THRESHOLD}
+    return {
+        "is_blurry": False, 
+        "is_low_quality": False,
+        "score": 999.0, 
+        "threshold": BLUR_THRESHOLD,
+        "warning_threshold": WARNING_THRESHOLD
+    }
 
 
 def check_answer_sheet_quality(answer_sheet) -> dict:

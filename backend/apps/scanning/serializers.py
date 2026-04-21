@@ -142,7 +142,7 @@ class AnswerSheetSerializer(serializers.ModelSerializer):
             'token', 'roll_number', 'pdf_file', 'pdf_version', 'status',
             'assigned_teacher', 'assigned_teacher_name',
             'uploaded_at', 'scanned_by', 'scanned_at',
-            'last_flagged_at', 'flag_reason',
+            'last_flagged_at', 'flag_reason', 'quality_score',
         ]
         read_only_fields = ['id', 'uploaded_at', 'scanned_at']
 

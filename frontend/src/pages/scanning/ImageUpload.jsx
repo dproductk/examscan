@@ -90,6 +90,9 @@ function ImageUpload() {
           preview: URL.createObjectURL(file),
           token: data.token || currentToken,
           pageNumber: data.page_number,
+          is_blurry: data.is_blurry,
+          is_low_quality: data.is_low_quality,
+          quality_score: data.quality_score,
         },
       ])
 
@@ -135,6 +138,16 @@ function ImageUpload() {
 
     setFinalizing(true)
     setMessage({ type: '', text: '' })
+
+    const hasBlurry = images.some((img) => img.is_blurry)
+    const hasLowQuality = images.some((img) => img.is_low_quality)
+
+    if (hasBlurry || hasLowQuality) {
+      if (!window.confirm("One or more pages are flagged as blurry or low quality. Do you want to finalize this answer sheet anyway?")) {
+        setFinalizing(false)
+        return
+      }
+    }
 
     try {
       await finalizeSheet({ bundle_id: bundleId, token: currentToken })
@@ -185,9 +198,9 @@ function ImageUpload() {
               <button 
                 className={`btn ${isScanningComplete ? 'btn-secondary' : 'btn-primary'}`}
                 style={{ opacity: isScanningComplete ? 1 : 0.5, pointerEvents: isScanningComplete ? 'auto' : 'none' }}
-                onClick={() => navigate(`/scan/submit/${bundleId}`)}
+                onClick={() => navigate(`/scanning/review/${bundleId}`)}
               >
-                {isScanningComplete ? "Review & Submit →" : "Scanning Required"}
+                {isScanningComplete ? "Finalize Bundle →" : "Scanning Required"}
               </button>
             </div>
           )}
@@ -336,8 +349,19 @@ function ImageUpload() {
           <div style={{ marginBottom: '1.5rem' }}>
             <h3 style={{ marginBottom: '1rem', fontSize: 'var(--font-size-lg)' }}>Uploaded Pages ({currentToken})</h3>
             <div className="grid-4">
-              {images.map((img, idx) => (
-                <div key={img.id} className="card" style={{ padding: '0.75rem', position: 'relative' }}>
+              {images.map((img, idx) => {
+                let borderStyle = undefined
+                let opacity = 1
+                if (img.is_blurry) {
+                  borderStyle = '2px solid var(--color-danger)'
+                  opacity = 0.7
+                } else if (img.is_low_quality) {
+                  borderStyle = '2px solid var(--color-warning)'
+                  opacity = 0.85
+                }
+                
+                return (
+                <div key={img.id} className="card" style={{ padding: '0.75rem', position: 'relative', border: borderStyle }}>
                   <img
                     src={img.preview}
                     alt={`Page ${img.pageNumber}`}
@@ -347,11 +371,32 @@ function ImageUpload() {
                       objectFit: 'cover',
                       borderRadius: 'var(--radius-sm)',
                       marginBottom: '0.5rem',
+                      opacity: opacity,
                     }}
                   />
+                  {img.is_blurry && (
+                    <div style={{
+                      position: 'absolute', top: '16px', left: '16px', right: '16px',
+                      background: 'var(--color-danger)', color: '#fff',
+                      fontSize: '11px', fontWeight: 700, padding: '4px 8px', textAlign: 'center',
+                      borderRadius: '4px', opacity: 0.95
+                    }}>
+                      ⚠️ Image Unclear
+                    </div>
+                  )}
+                  {img.is_low_quality && (
+                    <div style={{
+                      position: 'absolute', top: '16px', left: '16px', right: '16px',
+                      background: 'var(--color-warning)', color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                      fontSize: '11px', fontWeight: 700, padding: '4px 8px', textAlign: 'center',
+                      borderRadius: '4px', opacity: 0.95
+                    }}>
+                      ⚠️ Low Quality
+                    </div>
+                  )}
                   <div className="flex-between">
                     <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-                      Page {img.pageNumber}
+                      Page {img.pageNumber} {img.quality_score && `(Score: ${img.quality_score})`}
                     </span>
                     <button
                       className="btn btn-danger btn-sm"
@@ -362,7 +407,8 @@ function ImageUpload() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
