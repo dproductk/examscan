@@ -8,11 +8,11 @@ export function AuthProvider({ children }) {
   const [refreshToken, setRefreshToken] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Restore auth state from localStorage on mount
+  // Restore auth state from sessionStorage on mount
   useEffect(() => {
-    const storedAccess = localStorage.getItem('access_token')
-    const storedRefresh = localStorage.getItem('refresh_token')
-    const storedUser = localStorage.getItem('user')
+    const storedAccess = sessionStorage.getItem('access_token')
+    const storedRefresh = sessionStorage.getItem('refresh_token')
+    const storedUser = sessionStorage.getItem('user')
 
     if (storedAccess && storedUser) {
       setAccessToken(storedAccess)
@@ -20,7 +20,7 @@ export function AuthProvider({ children }) {
       try {
         setUser(JSON.parse(storedUser))
       } catch {
-        localStorage.clear()
+        sessionStorage.clear()
       }
     }
     setLoading(false)
@@ -34,17 +34,17 @@ export function AuthProvider({ children }) {
     setRefreshToken(refresh)
     setUser(userObj)
 
-    localStorage.setItem('access_token', access)
-    localStorage.setItem('refresh_token', refresh)
-    localStorage.setItem('user', JSON.stringify(userObj))
-    localStorage.setItem('user_role', role)
+    sessionStorage.setItem('access_token', access)
+    sessionStorage.setItem('refresh_token', refresh)
+    sessionStorage.setItem('user', JSON.stringify(userObj))
+    sessionStorage.setItem('user_role', role)
   }
 
   const logout = () => {
     setAccessToken(null)
     setRefreshToken(null)
     setUser(null)
-    localStorage.clear()
+    sessionStorage.clear()
   }
 
   const value = {

@@ -7,7 +7,7 @@ const axiosInstance = axios.create({
 
 // Request interceptor — attach access token
 axiosInstance.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
+  const token = sessionStorage.getItem('access_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -48,7 +48,7 @@ axiosInstance.interceptors.response.use(
       isRefreshing = true
 
       try {
-        const refresh = localStorage.getItem('refresh_token')
+        const refresh = sessionStorage.getItem('refresh_token')
         if (!refresh) throw new Error('No refresh token')
 
         const { data } = await axios.post(
@@ -56,9 +56,9 @@ axiosInstance.interceptors.response.use(
           { refresh }
         )
 
-        localStorage.setItem('access_token', data.access)
+        sessionStorage.setItem('access_token', data.access)
         if (data.refresh) {
-          localStorage.setItem('refresh_token', data.refresh)
+          sessionStorage.setItem('refresh_token', data.refresh)
         }
 
         processQueue(null, data.access)
@@ -71,8 +71,8 @@ axiosInstance.interceptors.response.use(
         isRefreshing = false
 
         // Clear auth state and redirect
-        localStorage.clear()
-        const role = localStorage.getItem('user_role')
+        sessionStorage.clear()
+        const role = sessionStorage.getItem('user_role')
         const loginPaths = {
           scanning_staff: '/login/scanning',
           teacher: '/login/teacher',
