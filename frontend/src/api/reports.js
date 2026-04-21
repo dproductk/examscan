@@ -26,3 +26,12 @@ export const exportAllPdfs = (params) =>
     params,
     responseType: 'blob',
   })
+
+export const exportBundlePdf = (bundleId) =>
+  axiosInstance.get(`/api/reports/export/bundle-pdf/${bundleId}/`, {
+    responseType: 'blob',
+  })
+
+// Reuse bundles list API — returns submitted bundles for the report page
+export const getBundlesForReport = () =>
+  axiosInstance.get('/api/bundles/list/')

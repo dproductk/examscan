@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getReportsSummary, exportExcel, exportStudentPdf, exportAllPdfs } from '../../api/reports'
+import { getReportsSummary, exportExcel, exportStudentPdf, exportAllPdfs, exportBundlePdf, getBundlesForReport } from '../../api/reports'
 import LoadingSpinner from '../../components/LoadingSpinner'
 
 function Reports() {
@@ -25,9 +25,23 @@ function Reports() {
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(null) // 'excel' | 'zip' | roll_number
 
-  useEffect(() => {
-    fetchData()
-  }, [filters.department, filters.semester, filters.academic_year, filters.subject])
+  // Bundle PDF state
+  const [bundles, setBundles] = useState([])
+  const [loadingBundles, setLoadingBundles] = useState(true)
+  const [exportingBundle, setExportingBundle] = useState(null) // bundle_id being exported
+  const [bundleStatusFilter, setBundleStatusFilter] = useState('submitted')
+
+  const fetchBundles = async () => {
+    setLoadingBundles(true)
+    try {
+      const res = await getBundlesForReport()
+      setBundles(res.data.results || res.data || [])
+    } catch (err) {
+      console.error('Failed to fetch bundles:', err)
+    } finally {
+      setLoadingBundles(false)
+    }
+  }
 
   const fetchData = async () => {
     setLoading(true)
@@ -49,6 +63,15 @@ function Reports() {
     }
   }
 
+  useEffect(() => {
+    fetchBundles()
+  }, [])
+
+  // Auto-fetch student data when filters change
+  useEffect(() => {
+    fetchData()
+  }, [filters.department, filters.semester, filters.academic_year, filters.subject])
+
   const handleFilterChange = (key, value) => {
     setFilters(prev => ({ ...prev, [key]: value }))
   }
@@ -57,6 +80,26 @@ function Reports() {
     e.preventDefault()
     fetchData()
   }
+
+  const downloadBundlePdf = async (bundle) => {
+    setExportingBundle(bundle.id)
+    try {
+      const response = await exportBundlePdf(bundle.id)
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `bundle_${bundle.bundle_number}_report.pdf`
+      link.click()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Bundle PDF export failed:', err)
+      alert('Failed to generate bundle PDF. Please try again.')
+    } finally {
+      setExportingBundle(null)
+    }
+  }
+
 
   const doExport = async (type, rollNumber = null) => {
     setExporting(rollNumber || type)
@@ -122,6 +165,104 @@ function Reports() {
           </div>
         </div>
       </div>
+
+      {/* ── Bundle PDF Reports Section ─────────────────────────────────── */}
+      <div className="card" style={{ marginBottom: '2rem', borderLeft: '4px solid var(--color-primary)' }}>
+        <div className="flex-between" style={{ marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📦 Bundle PDF Reports</h2>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Download a full PDF for any bundle — includes every student's roll number, token/code, and question-wise marks.
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label className="form-label" style={{ margin: 0, whiteSpace: 'nowrap' }}>Status:</label>
+            <select
+              className="form-select"
+              value={bundleStatusFilter}
+              onChange={(e) => setBundleStatusFilter(e.target.value)}
+              style={{ width: 'auto' }}
+              id="bundle-status-filter"
+            >
+              <option value="">All</option>
+              <option value="submitted">Submitted</option>
+              <option value="open">Open</option>
+            </select>
+          </div>
+        </div>
+
+        {loadingBundles ? (
+          <LoadingSpinner message="Loading bundles..." />
+        ) : bundles.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+            No bundles found.
+          </div>
+        ) : (
+          <div className="table-container" style={{ margin: 0 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Bundle #</th>
+                  <th>Subject</th>
+                  <th>Department</th>
+                  <th>Sem</th>
+                  <th>Academic Year</th>
+                  <th>Sheets</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bundles
+                  .filter(b => !bundleStatusFilter || b.status === bundleStatusFilter)
+                  .map((bundle) => (
+                  <tr key={bundle.id}>
+                    <td style={{ fontWeight: 700, color: 'var(--color-primary)' }}>#{bundle.bundle_number}</td>
+                    <td>
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{bundle.subject_code || bundle.subject?.subject_code || '-'}</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{bundle.subject_name || bundle.subject?.subject_name || ''}</div>
+                    </td>
+                    <td style={{ fontSize: '0.9rem' }}>{bundle.department || bundle.subject?.department || '-'}</td>
+                    <td style={{ textAlign: 'center' }}>{bundle.semester || bundle.subject?.semester || '-'}</td>
+                    <td>{bundle.academic_year || '-'}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontWeight: 600 }}>{bundle.sheets_count ?? bundle.total_sheets}</span>
+                      {bundle.total_sheets && bundle.sheets_count !== undefined && (
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}> / {bundle.total_sheets}</span>
+                      )}
+                    </td>
+                    <td>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '2px 10px',
+                        borderRadius: '12px',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: bundle.status === 'submitted' ? 'var(--color-success)' : 'var(--color-warning)',
+                        color: '#fff',
+                      }}>
+                        {bundle.status}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => downloadBundlePdf(bundle)}
+                        disabled={exportingBundle === bundle.id}
+                        id={`download-bundle-pdf-${bundle.id}`}
+                        title={`Download PDF for Bundle #${bundle.bundle_number}`}
+                      >
+                        {exportingBundle === bundle.id ? <LoadingSpinner size={14} /> : '📄 Download PDF'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {/* ── End Bundle PDF Section ──────────────────────────────────────── */}
 
       {/* Primary Filters Area */}
       <div className="card" style={{ marginBottom: '2rem' }}>

@@ -12,7 +12,7 @@ from apps.evaluation.models import EvaluationResult
 from apps.scanning.models import Subject, Bundle, AnswerSheet
 from utils.audit_helper import log_action
 from .excel_export import generate_excel_report
-from .pdf_export import generate_student_pdf_response, generate_student_pdf_bytes
+from .pdf_export import generate_student_pdf_response, generate_student_pdf_bytes, generate_bundle_pdf_response
 
 
 # ── Helper ────────────────────────────────────────
@@ -200,3 +200,56 @@ class AllPDFsExportView(APIView):
         response = HttpResponse(zip_buffer.read(), content_type='application/zip')
         response['Content-Disposition'] = 'attachment; filename="all_student_results.zip"'
         return response
+
+
+class BundlePDFExportView(APIView):
+    """
+    GET /api/reports/export/bundle-pdf/<bundle_id>/
+    Download a single PDF that covers every answer sheet in a bundle.
+    Each sheet gets its own page: roll number, token/code, and a
+    section-by-section / question-by-question marks table.
+    """
+    permission_classes = [IsExamDept]
+
+    def get(self, request, bundle_id):
+        from datetime import date
+
+        try:
+            bundle = Bundle.objects.select_related('subject').get(pk=bundle_id)
+        except Bundle.DoesNotExist:
+            return Response({'error': 'Bundle not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch all answer sheets for this bundle with their evaluations
+        sheets_qs = AnswerSheet.objects.filter(bundle=bundle).select_related(
+            'evaluation'
+        ).order_by('roll_number')
+
+        sheets_data = []
+        for sheet in sheets_qs:
+            evaluation = getattr(sheet, 'evaluation', None)
+            sheets_data.append({
+                'roll_number': sheet.roll_number or 'N/A',
+                'token': sheet.token or 'N/A',
+                'status': sheet.status,
+                'total_marks': evaluation.total_marks if evaluation else '-',
+                'section_results': evaluation.section_results if evaluation else [],
+            })
+
+        bundle_data = {
+            'bundle_number': bundle.bundle_number,
+            'subject_code': bundle.subject.subject_code,
+            'subject_name': bundle.subject.subject_name,
+            'department': bundle.subject.department,
+            'semester': bundle.subject.semester,
+            'academic_year': bundle.academic_year,
+            'total_sheets': bundle.total_sheets,
+            'generated_on': date.today().strftime('%d %B %Y'),
+            'sheets': sheets_data,
+        }
+
+        log_action(
+            request, 'RESULT_GENERATED', 'Bundle', bundle_id,
+            notes=f'Bundle PDF exported for bundle #{bundle.bundle_number} ({len(sheets_data)} sheets).'
+        )
+
+        return generate_bundle_pdf_response(bundle_data)

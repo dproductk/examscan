@@ -48,15 +48,29 @@ function ImageUpload() {
     (mediaDevices) => {
       const videoDevices = mediaDevices.filter(({ kind }) => kind === 'videoinput')
       setDevices(videoDevices)
-      if (videoDevices.length > 0 && !selectedDevice) {
-        setSelectedDevice(videoDevices[0].deviceId)
-      }
+      
+      setSelectedDevice(prevDevice => {
+        if (prevDevice && videoDevices.some(d => d.deviceId === prevDevice)) {
+          return prevDevice;
+        }
+        return videoDevices.length > 0 ? videoDevices[0].deviceId : '';
+      })
     },
-    [selectedDevice]
+    []
   )
 
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then(handleDevices)
+    const loadDevices = () => navigator.mediaDevices.enumerateDevices().then(handleDevices)
+    
+    // Initial load
+    loadDevices()
+    
+    // Listen for USB plug/unplug events
+    navigator.mediaDevices.addEventListener('devicechange', loadDevices)
+    
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', loadDevices)
+    }
   }, [handleDevices])
 
   const processFile = async (file) => {
