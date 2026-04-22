@@ -4,6 +4,7 @@ from .views import (
     AnswerSheetListView, AnswerSheetAssignView, AnswerSheetBulkAssignView,
     AnswerSheetFlagView, AnswerSheetPDFView,
     AnswerSheetThumbnailView, AnswerSheetReplaceImageView,
+    IPWebcamProxyView,
 )
 
 urlpatterns = [
@@ -17,4 +18,5 @@ urlpatterns = [
     path('<int:pk>/pdf/', AnswerSheetPDFView.as_view(), name='sheet-pdf'),
     path('<int:pk>/thumbnail/', AnswerSheetThumbnailView.as_view(), name='sheet-thumbnail'),
     path('<int:pk>/replace-image/', AnswerSheetReplaceImageView.as_view(), name='sheet-replace-image'),
+    path('ip-webcam-proxy/', IPWebcamProxyView.as_view(), name='ip-webcam-proxy'),
 ]

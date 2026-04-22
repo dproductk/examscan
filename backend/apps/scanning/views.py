@@ -29,6 +29,7 @@ class SubjectListCreateView(generics.ListCreateAPIView):
     """GET / POST subjects. Exam dept can create; any authenticated can list."""
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
+    pagination_class = None
 
     def get_permissions(self):
         if self.request.method == 'POST':
@@ -62,6 +63,7 @@ class BundleListView(generics.ListAPIView):
     """GET /api/bundles/ — Exam dept lists all bundles. Scanners list their own."""
     queryset = Bundle.objects.select_related('subject', 'created_by').all()
     serializer_class = BundleSerializer
+    pagination_class = None
     filterset_fields = ['status', 'subject__department']
 
     def get_permissions(self):
@@ -412,6 +414,7 @@ class AnswerSheetListView(generics.ListAPIView):
     Exam dept sees all; teachers see only their assigned sheets.
     """
     serializer_class = AnswerSheetSerializer
+    pagination_class = None
 
     def get_permissions(self):
         # Allow any of these roles
@@ -967,3 +970,40 @@ class AnswerSheetReplaceImageView(APIView):
             'thumbnail_url': f'/api/answer-sheets/{sheet.id}/thumbnail/',
             'quality': quality,
         })
+
+
+class IPWebcamProxyView(APIView):
+    """
+    GET /api/answer-sheets/ip-webcam-proxy/?url=...
+    Proxies requests to local IP webcams to bypass browser CORS and mixed-content issues.
+    """
+    permission_classes = [] # Allow unauthenticated local proxying to avoid token issues in img src
+
+    def get(self, request):
+        url = request.query_params.get('url')
+        if not url:
+            from rest_framework.response import Response
+            from rest_framework import status
+            return Response({'error': 'URL is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            import urllib.request
+            req = urllib.request.Request(url)
+            response = urllib.request.urlopen(req, timeout=5)
+            
+            def stream_generator():
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            
+            from django.http import StreamingHttpResponse
+            return StreamingHttpResponse(
+                stream_generator(),
+                content_type=response.headers.get('Content-Type', 'image/jpeg')
+            )
+        except Exception as e:
+            from rest_framework.response import Response
+            from rest_framework import status
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

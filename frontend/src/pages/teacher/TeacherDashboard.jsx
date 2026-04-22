@@ -178,7 +178,7 @@ function TeacherDashboard() {
                                    <table style={{ margin: 0, background: 'var(--background-secondary)', borderRadius: '8px', overflow: 'hidden' }}>
                                      <thead>
                                        <tr style={{ background: 'var(--border-color)' }}>
-                                         <th style={{ padding: '0.75rem 1rem' }}>PDF Version</th>
+                                         <th style={{ padding: '0.75rem 1rem' }}>S.No. & Barcode</th>
                                          <th style={{ padding: '0.75rem 1rem' }}>Status</th>
                                          <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Action</th>
                                        </tr>
@@ -186,7 +186,11 @@ function TeacherDashboard() {
                                      <tbody>
                                        {bundleSheets.map((sheet, idx) => (
                                           <tr key={sheet.id}>
-                                            <td style={{ padding: '0.75rem 1rem' }}>Sheet {idx + 1} (v{sheet.pdf_version})</td>
+                                            <td style={{ padding: '0.75rem 1rem' }}>
+                                              <span style={{ color: 'var(--text-muted)', marginRight: '0.5rem' }}>#{idx + 1}</span>
+                                              <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>{sheet.token}</span>
+                                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>(v{sheet.pdf_version})</span>
+                                            </td>
                                             <td style={{ padding: '0.75rem 1rem' }}><StatusBadge status={sheet.status} /></td>
                                             <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
                                               <button

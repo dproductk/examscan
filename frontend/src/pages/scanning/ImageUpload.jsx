@@ -24,6 +24,8 @@ function ImageUpload() {
   // Camera selection states
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState('')
+  const [ipWebcamUrl, setIpWebcamUrl] = useState('http://192.168.137.14:8080')
+  const ipWebcamRef = useRef(null)
 
   // Bundle progress states
   const [bundle, setBundle] = useState(null)
@@ -133,6 +135,41 @@ function ImageUpload() {
     const file = new File([blob], 'captured_page.jpg', { type: 'image/jpeg' })
     processFile(file)
   }, [webcamRef, images.length, isFirstPage, currentToken])
+
+  const captureIpWebcam = useCallback(async () => {
+    try {
+      const targetUrl = ipWebcamUrl.replace(/\/$/, '')
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+      const proxyUrl = `${baseUrl}/api/answer-sheets/ip-webcam-proxy/?url=`
+      const res = await fetch(`${proxyUrl}${encodeURIComponent(targetUrl + '/shot.jpg')}`)
+      const blob = await res.blob()
+      const file = new File([blob], 'captured_page.jpg', { type: 'image/jpeg' })
+      processFile(file)
+    } catch (err) {
+      console.error("Fetch failed, trying canvas fallback:", err)
+      if (ipWebcamRef.current) {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = ipWebcamRef.current.naturalWidth || 640
+          canvas.height = ipWebcamRef.current.naturalHeight || 480
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(ipWebcamRef.current, 0, 0, canvas.width, canvas.height)
+          
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const file = new File([blob], 'captured_page.jpg', { type: 'image/jpeg' })
+              processFile(file)
+            } else {
+              setMessage({ type: 'error', text: 'Could not create image blob from IP stream.' })
+            }
+          }, 'image/jpeg')
+        } catch (canvasErr) {
+          console.error(canvasErr)
+          setMessage({ type: 'error', text: 'Failed to capture. The device might be blocking access due to CORS restrictions.' })
+        }
+      }
+    }
+  }, [ipWebcamUrl, ipWebcamRef, images.length, isFirstPage, currentToken])
 
   const handleDelete = async (imageId, index) => {
     try {
@@ -306,33 +343,55 @@ function ImageUpload() {
             </>
           ) : (
             <div className="fade-in">
-              {devices.length > 1 && (
-                <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
-                  <label className="form-label" style={{ display: 'inline-block', marginRight: '0.5rem' }}>Camera:</label>
-                  <select 
-                    className="form-select" 
-                    value={selectedDevice} 
-                    onChange={(e) => setSelectedDevice(e.target.value)}
-                    style={{ display: 'inline-block', width: 'auto' }}
-                  >
-                    {devices.map((device, key) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Camera ${key + 1}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
+                <label className="form-label" style={{ display: 'inline-block', marginRight: '0.5rem' }}>Camera:</label>
+                <select 
+                  className="form-select" 
+                  value={selectedDevice} 
+                  onChange={(e) => setSelectedDevice(e.target.value)}
+                  style={{ display: 'inline-block', width: 'auto' }}
+                >
+                  {devices.map((device, key) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Camera ${key + 1}`}
+                    </option>
+                  ))}
+                  <option value="ip_webcam">Network IP Webcam</option>
+                </select>
+              </div>
               <div style={{ maxWidth: '600px', margin: '0 auto', borderRadius: '12px', overflow: 'hidden', position: 'relative', background: '#000' }}>
-                <Webcam
-                  audio={false}
-                  ref={webcamRef}
-                  screenshotFormat="image/jpeg"
-                  videoConstraints={{ deviceId: selectedDevice ? { exact: selectedDevice } : undefined, facingMode: "environment" }}
-                  style={{ width: '100%', display: 'block' }}
-                />
+                {selectedDevice === 'ip_webcam' ? (
+                  <div style={{ position: 'relative', width: '100%', minHeight: '300px', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ padding: '0.5rem', background: '#222' }}>
+                       <input 
+                         type="text" 
+                         value={ipWebcamUrl}
+                         onChange={(e) => setIpWebcamUrl(e.target.value)}
+                         style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid #444', background: '#111', color: '#fff' }}
+                         placeholder="e.g., http://192.168.137.14:8080"
+                       />
+                    </div>
+                    <img 
+                      ref={ipWebcamRef}
+                      src={`${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'}/api/answer-sheets/ip-webcam-proxy/?url=${encodeURIComponent(ipWebcamUrl.replace(/\/$/, '') + '/video')}`}
+                      alt="IP Webcam Stream" 
+                      style={{ width: '100%', flexGrow: 1, objectFit: 'contain', background: '#000' }} 
+                      onError={(e) => {
+                        e.target.alt = "Failed to load IP stream. Check URL."
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <Webcam
+                    audio={false}
+                    ref={webcamRef}
+                    screenshotFormat="image/jpeg"
+                    videoConstraints={{ deviceId: selectedDevice ? { exact: selectedDevice } : undefined, facingMode: "environment" }}
+                    style={{ width: '100%', display: 'block' }}
+                  />
+                )}
                 <button
-                  onClick={captureWebcam}
+                  onClick={selectedDevice === 'ip_webcam' ? captureIpWebcam : captureWebcam}
                   style={{
                     position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
                     background: '#fff', border: '4px solid var(--color-primary)', borderRadius: '50%',
