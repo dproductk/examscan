@@ -1,8 +1,12 @@
+import os
 import io
 import zipfile
+import hashlib
+import datetime
 from collections import defaultdict
 
 from django.http import HttpResponse
+from django.conf import settings
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
@@ -11,6 +15,12 @@ from apps.users.permissions import IsExamDept
 from apps.evaluation.models import EvaluationResult
 from apps.scanning.models import Subject, Bundle, AnswerSheet
 from utils.audit_helper import log_action
+from apps.evaluation.result_page_generator import generate_result_page
+
+from pypdf import PdfReader, PdfWriter
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
 from .excel_export import generate_excel_report
 from .pdf_export import generate_student_pdf_response, generate_student_pdf_bytes, generate_bundle_pdf_response
 
@@ -253,3 +263,318 @@ class BundlePDFExportView(APIView):
         )
 
         return generate_bundle_pdf_response(bundle_data)
+
+
+def _prepend_result_page(result_page_bytes: bytes, marked_pdf_path: str) -> bytes:
+    """
+    Prepends the result summary page to the marked PDF.
+    Everything happens in memory — nothing written to disk.
+
+    Args:
+        result_page_bytes: bytes of the result page PDF (from generate_result_page)
+        marked_pdf_path:   absolute path to the marked PDF on disk
+
+    Returns:
+        bytes of the combined PDF (result page + all marked pages)
+    """
+    writer = PdfWriter()
+
+    # Page 1: result summary
+    result_reader = PdfReader(io.BytesIO(result_page_bytes))
+    writer.add_page(result_reader.pages[0])
+
+    # Pages 2+: original marked PDF pages
+    marked_reader = PdfReader(marked_pdf_path)
+    for page in marked_reader.pages:
+        writer.add_page(page)
+
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _build_summary_xlsx(results_data: list, subject_code: str, subject_name: str) -> bytes:
+    """
+    Builds a summary Excel file listing all students with their marks.
+
+    Args:
+        results_data: list of dicts — each has:
+            { roll_number, token, total_marks, max_marks, section_results }
+        subject_code: e.g. "ETH405"
+        subject_name: e.g. "Embedded Systems"
+
+    Returns:
+        bytes of the .xlsx file
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{subject_code} Results"
+
+    # Styles
+    header_fill   = PatternFill("solid", fgColor="0F6E56")
+    header_font   = Font(bold=True, color="FFFFFF", size=10)
+    title_font    = Font(bold=True, size=12)
+    total_fill    = PatternFill("solid", fgColor="E1F5EE")
+    total_font    = Font(bold=True, color="0F6E56", size=10)
+    center_align  = Alignment(horizontal="center", vertical="center")
+    left_align    = Alignment(horizontal="left",   vertical="center")
+    thin_border   = Border(
+        left=Side(style="thin", color="CBD5E0"),
+        right=Side(style="thin", color="CBD5E0"),
+        top=Side(style="thin", color="CBD5E0"),
+        bottom=Side(style="thin", color="CBD5E0"),
+    )
+
+    # Title row
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"Results Summary — {subject_code}: {subject_name}"
+    ws["A1"].font      = title_font
+    ws["A1"].alignment = left_align
+    ws.row_dimensions[1].height = 22
+
+    ws.merge_cells("A2:F2")
+    ws["A2"] = f"Generated: {datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')}"
+    ws["A2"].font      = Font(size=9, color="4A5568")
+    ws["A2"].alignment = left_align
+    ws.row_dimensions[2].height = 16
+
+    # Header row
+    headers = ["#", "Roll Number", "Token / Code", "Max Marks", "Marks Obtained", "Percentage"]
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=3, column=col_idx, value=header)
+        cell.font      = header_font
+        cell.fill      = header_fill
+        cell.alignment = center_align
+        cell.border    = thin_border
+    ws.row_dimensions[3].height = 18
+
+    # Data rows
+    for row_idx, data in enumerate(results_data, start=1):
+        row_num   = row_idx + 3
+        max_marks = data.get('max_marks', 0)
+        obtained  = data.get('total_marks', 0)
+        pct       = round((obtained / max_marks * 100), 1) if max_marks > 0 else 0
+
+        row_values = [
+            row_idx,
+            data['roll_number'],
+            data['token'],
+            max_marks,
+            obtained,
+            f"{pct}%",
+        ]
+        for col_idx, value in enumerate(row_values, start=1):
+            cell = ws.cell(row=row_num, column=col_idx, value=value)
+            cell.alignment = center_align if col_idx != 2 else left_align
+            cell.border    = thin_border
+            if row_idx % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F9FAFB")
+
+        ws.row_dimensions[row_num].height = 16
+
+    # Totals row
+    total_row = len(results_data) + 4
+    ws.merge_cells(f"A{total_row}:C{total_row}")
+    ws[f"A{total_row}"] = f"Total Students: {len(results_data)}"
+    ws[f"A{total_row}"].font      = total_font
+    ws[f"A{total_row}"].fill      = total_fill
+    ws[f"A{total_row}"].alignment = left_align
+    ws[f"A{total_row}"].border    = thin_border
+
+    avg_obtained = round(
+        sum(d.get('total_marks', 0) for d in results_data) / len(results_data), 1
+    ) if results_data else 0
+    ws[f"E{total_row}"] = f"Avg: {avg_obtained}"
+    ws[f"E{total_row}"].font      = total_font
+    ws[f"E{total_row}"].fill      = total_fill
+    ws[f"E{total_row}"].alignment = center_align
+    ws[f"E{total_row}"].border    = thin_border
+
+    # Column widths
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 18
+    ws.column_dimensions["F"].width = 14
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+class DownloadMarkedPDFsView(APIView):
+    """
+    GET /api/reports/download-marked-pdfs/
+    exam_dept only.
+
+    Query params (use one):
+        subject_id  — all completed sheets across all bundles for this subject
+        bundle_id   — all completed sheets in this specific bundle
+
+    Returns a ZIP file containing:
+        marked_papers_{subject_code}.zip
+          ├── {roll_number}_{subject_code}_marked.pdf   ← one per student
+          ├── {roll_number}_{subject_code}_marked.pdf
+          ├── ...
+          ├── results_summary_{subject_code}.xlsx
+          └── manifest.txt
+
+    Each PDF = result summary page (A4, auto-generated) + original marked pages.
+    Files on disk are NEVER modified — all merging is done in memory.
+    Roll numbers appear in ZIP filenames but never on disk storage.
+    """
+    permission_classes = [IsExamDept]
+
+    def get(self, request):
+        subject_id = request.query_params.get('subject_id')
+        bundle_id  = request.query_params.get('bundle_id')
+
+        if not subject_id and not bundle_id:
+            return Response(
+                {'error': 'Provide either subject_id or bundle_id.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # ── Fetch completed evaluations ───────────────────────────────────────
+        qs = EvaluationResult.objects.select_related(
+            'answer_sheet',
+            'answer_sheet__bundle',
+            'answer_sheet__bundle__subject',
+        ).exclude(
+            marked_pdf_path__isnull=True
+        ).exclude(
+            marked_pdf_path=''
+        ).filter(
+            answer_sheet__status='completed'
+        )
+
+        if bundle_id:
+            qs = qs.filter(answer_sheet__bundle_id=bundle_id)
+        elif subject_id:
+            qs = qs.filter(answer_sheet__bundle__subject_id=subject_id)
+
+        qs = qs.order_by('answer_sheet__roll_number')
+
+        if not qs.exists():
+            return Response(
+                {'error': 'No completed marked PDFs found for the given filter.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # ── Gather metadata ───────────────────────────────────────────────────
+        first         = qs.first()
+        subject       = first.answer_sheet.bundle.subject
+        subject_code  = subject.subject_code
+        subject_name  = subject.subject_name
+        department    = subject.department
+        semester      = subject.semester
+        total_count   = qs.count()
+
+        # Infer academic year from current date
+        now = datetime.datetime.now()
+        if now.month >= 6:
+            academic_year = f"{now.year}-{str(now.year + 1)[2:]}"
+        else:
+            academic_year = f"{now.year - 1}-{str(now.year)[2:]}"
+
+        # ── Build ZIP in memory ───────────────────────────────────────────────
+        zip_buffer    = io.BytesIO()
+        missing_files = []
+        included      = []
+        results_data  = []   # for the summary Excel
+
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+
+            for idx, result in enumerate(qs, start=1):
+                sheet       = result.answer_sheet
+                roll_number = sheet.roll_number
+                token       = sheet.token
+                full_path   = os.path.join(settings.MEDIA_ROOT, result.marked_pdf_path)
+
+                # Skip if file missing on disk
+                if not os.path.exists(full_path):
+                    missing_files.append(
+                        f"{roll_number} ({token}) — marked PDF missing on disk: "
+                        f"{result.marked_pdf_path}"
+                    )
+                    continue
+
+                # Compute max marks from section_results
+                max_marks = sum(
+                    q.get('max_marks', 0)
+                    for sec in result.section_results
+                    for q in sec.get('questions', [])
+                )
+
+                # ── Generate result summary page ──────────────────────────────
+                try:
+                    result_page_bytes = generate_result_page(
+                        roll_number=roll_number,
+                        token=token,
+                        subject_code=subject_code,
+                        subject_name=subject_name,
+                        department=department,
+                        semester=semester,
+                        academic_year=academic_year,
+                        section_results=result.section_results,
+                        total_marks=result.total_marks,
+                        student_index=idx,
+                        total_students=total_count,
+                    )
+                except Exception as e:
+                    missing_files.append(
+                        f"{roll_number} — result page generation failed: {e}"
+                    )
+                    continue
+
+                # ── Prepend result page to marked PDF (in memory) ─────────────
+                try:
+                    combined_pdf_bytes = _prepend_result_page(
+                        result_page_bytes=result_page_bytes,
+                        marked_pdf_path=full_path,
+                    )
+                except Exception as e:
+                    missing_files.append(
+                        f"{roll_number} — PDF merge failed: {e}"
+                    )
+                    continue
+
+                # ── Add to ZIP with roll-number-based filename ────────────────
+                zip_filename = f"{roll_number}_{subject_code}_marked.pdf"
+                zf.writestr(zip_filename, combined_pdf_bytes)
+                included.append(roll_number)
+
+                # Collect for summary Excel
+                results_data.append({
+                    'roll_number': roll_number,
+                    'token':       token,
+                    'total_marks': result.total_marks,
+                    'max_marks':   max_marks,
+                    'section_results': result.section_results,
+                })
+
+            # Removed Summary Excel and Manifest generation as requested by user
+
+        # ── AuditLog ──────────────────────────────────────────────────────────
+        log_action(
+            request,
+            action_type='RESULT_GENERATED',
+            target_model='Subject',
+            target_id=int(subject_id) if subject_id else 0,
+            new_value={
+                'included_count': len(included),
+                'missing_count':  len(missing_files),
+                'subject_code':   subject_code,
+                'filter':         f"subject_id={subject_id}" if subject_id
+                                  else f"bundle_id={bundle_id}",
+            },
+            notes=f"Bulk marked PDF download by {request.user.full_name}"
+        )
+
+        # ── Stream ZIP response ───────────────────────────────────────────────
+        zip_buffer.seek(0)
+        zip_filename = f"marked_papers_{subject_code}.zip"
+        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="{zip_filename}"'
+        return response

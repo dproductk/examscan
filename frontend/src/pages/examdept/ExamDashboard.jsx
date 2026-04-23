@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { getBundles } from '../../api/bundles'
 import axiosInstance from '../../api/axiosInstance'
 import LoadingSpinner from '../../components/LoadingSpinner'
+import DownloadMarkedPDFsButton from '../../components/DownloadMarkedPDFsButton'
 
 function ExamDashboard() {
   const { user } = useAuth()
@@ -164,7 +165,13 @@ function ExamDashboard() {
                                <button className="btn btn-secondary btn-sm" onClick={() => setAssigningId(bundle.id)}>+ Assign Teacher</button>
                              )
                           ) : bundle.status === 'submitted' && bundle.assigned_count > 0 ? (
-                               <span style={{ color: 'var(--color-secondary)', fontWeight: 600, fontSize: '0.9rem' }}>✓ Assigned</span>
+                               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                 <span style={{ color: 'var(--color-secondary)', fontWeight: 600, fontSize: '0.9rem' }}>✓ Assigned</span>
+                                 <DownloadMarkedPDFsButton
+                                   bundleId={bundle.id}
+                                   completedCount={bundle.graded_count || 0}
+                                 />
+                               </div>
                           ) : (
                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textTransform: 'capitalize' }}>{bundle.status}</span>
                           )}

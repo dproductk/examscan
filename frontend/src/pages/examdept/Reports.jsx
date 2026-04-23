@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getReportsSummary, exportExcel, exportStudentPdf, exportAllPdfs, exportBundlePdf, getBundlesForReport } from '../../api/reports'
 import LoadingSpinner from '../../components/LoadingSpinner'
+import DownloadMarkedPDFsButton from '../../components/DownloadMarkedPDFsButton'
 
 function Reports() {
   const [students, setStudents] = useState([])
@@ -245,15 +246,21 @@ function Reports() {
                       </span>
                     </td>
                     <td>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => downloadBundlePdf(bundle)}
-                        disabled={exportingBundle === bundle.id}
-                        id={`download-bundle-pdf-${bundle.id}`}
-                        title={`Download PDF for Bundle #${bundle.bundle_number}`}
-                      >
-                        {exportingBundle === bundle.id ? <LoadingSpinner size={14} /> : '📄 Download PDF'}
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => downloadBundlePdf(bundle)}
+                          disabled={exportingBundle === bundle.id}
+                          id={`download-bundle-pdf-${bundle.id}`}
+                          title={`Download PDF for Bundle #${bundle.bundle_number}`}
+                        >
+                          {exportingBundle === bundle.id ? <LoadingSpinner size={14} /> : '📄 Download PDF'}
+                        </button>
+                        <DownloadMarkedPDFsButton
+                          bundleId={bundle.id}
+                          completedCount={bundle.graded_count || 0}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

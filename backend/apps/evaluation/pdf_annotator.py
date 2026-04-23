@@ -181,28 +181,32 @@ def annotate_pdf(
 
             if img_result:
                 img_data, _, _ = img_result
-                # Rebuild the page from scratch: image + badges
-                new_page_bytes = _build_page_with_badges(
-                    page_w, page_h, img_data,
-                    pages_with_badges[page_no],
-                )
-                new_page = PdfReader(io.BytesIO(new_page_bytes)).pages[0]
-                writer.add_page(new_page)
-            else:
-                # Fallback: no extractable image — use merge_page
-                overlay_buf = io.BytesIO()
-                c = rl_canvas.Canvas(overlay_buf, pagesize=(page_w, page_h))
-                for badge in pages_with_badges[page_no]:
-                    cx = (badge['x_percent'] / 100.0) * page_w
-                    cy = page_h - (badge['y_percent'] / 100.0) * page_h
-                    cx = max(BADGE_WIDTH / 2 + 2, min(page_w - BADGE_WIDTH / 2 - 2, cx))
-                    cy = max(BADGE_HEIGHT / 2 + 2, min(page_h - BADGE_HEIGHT / 2 - 2, cy))
-                    _draw_badge(c, cx, cy, badge['value'])
-                c.save()
-                overlay_buf.seek(0)
-                overlay_page = PdfReader(overlay_buf).pages[0]
-                page.merge_page(overlay_page, over=True)
-                writer.add_page(page)
+                try:
+                    # Rebuild the page from scratch: image + badges
+                    new_page_bytes = _build_page_with_badges(
+                        page_w, page_h, img_data,
+                        pages_with_badges[page_no],
+                    )
+                    new_page = PdfReader(io.BytesIO(new_page_bytes)).pages[0]
+                    writer.add_page(new_page)
+                    continue
+                except Exception as e:
+                    print(f"Fallback to merge_page due to image format error: {e}")
+
+            # Fallback: no extractable image or PIL could not identify it — use merge_page
+            overlay_buf = io.BytesIO()
+            c = rl_canvas.Canvas(overlay_buf, pagesize=(page_w, page_h))
+            for badge in pages_with_badges[page_no]:
+                cx = (badge['x_percent'] / 100.0) * page_w
+                cy = page_h - (badge['y_percent'] / 100.0) * page_h
+                cx = max(BADGE_WIDTH / 2 + 2, min(page_w - BADGE_WIDTH / 2 - 2, cx))
+                cy = max(BADGE_HEIGHT / 2 + 2, min(page_h - BADGE_HEIGHT / 2 - 2, cy))
+                _draw_badge(c, cx, cy, badge['value'])
+            c.save()
+            overlay_buf.seek(0)
+            overlay_page = PdfReader(overlay_buf).pages[0]
+            page.merge_page(overlay_page, over=True)
+            writer.add_page(page)
         else:
             # No badges on this page — copy unchanged
             writer.add_page(page)
