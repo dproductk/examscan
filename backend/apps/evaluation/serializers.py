@@ -5,23 +5,31 @@ from .models import EvaluationResult
 class EvaluationResultSerializer(serializers.ModelSerializer):
     """
     Serializer for EvaluationResult.
-    Validates marks_obtained: 0 ≤ value ≤ max_marks for every question.
+    Validates marks_obtained: 0 ≤ value ≤ max_marks for every question part.
     """
     teacher_name = serializers.CharField(source='teacher.full_name', read_only=True)
     answer_sheet_id = serializers.IntegerField(source='answer_sheet.id', read_only=True)
+    answer_sheet_status = serializers.CharField(source='answer_sheet.status', read_only=True)
 
     class Meta:
         model = EvaluationResult
         fields = [
-            'id', 'answer_sheet', 'answer_sheet_id', 'teacher', 'teacher_name',
+            'id', 'answer_sheet', 'answer_sheet_id', 'answer_sheet_status',
+            'teacher', 'teacher_name',
             'section_results', 'total_marks', 'submitted_at', 'graded_at',
             'last_edited_at', 'pdf_version_at_grading',
             'was_amended', 'amended_at',
+            # Badge fields
+            'mark_positions', 'marked_pdf_path',
         ]
-        read_only_fields = ['id', 'submitted_at', 'graded_at', 'last_edited_at', 'teacher', 'total_marks', 'was_amended', 'amended_at']
+        read_only_fields = [
+            'id', 'submitted_at', 'graded_at', 'last_edited_at',
+            'teacher', 'total_marks', 'was_amended', 'amended_at',
+            'marked_pdf_path', 'answer_sheet_status',
+        ]
 
     def validate_section_results(self, value):
-        """Validate marks_obtained for every part using the new Q -> SQ -> Part schema."""
+        """Validate marks_obtained for every part using the Q -> SQ -> Part schema."""
         if not isinstance(value, list) or len(value) == 0:
             raise serializers.ValidationError('section_results must be a non-empty list.')
 
@@ -59,7 +67,7 @@ class EvaluationResultSerializer(serializers.ModelSerializer):
 
                     part_totals.append(marks_obtained)
 
-                # apply sub-question attempt rule
+                # Apply sub-question attempt rule
                 sq_rule = sq.get('rule', 'all')
                 sq_rule_count = sq.get('rule_count')
                 if sq_rule == 'any' and isinstance(sq_rule_count, int) and sq_rule_count > 0:
@@ -67,11 +75,11 @@ class EvaluationResultSerializer(serializers.ModelSerializer):
                     sq_total = sum(part_totals[:sq_rule_count])
                 else:
                     sq_total = sum(part_totals)
-                
+
                 sq['obtained_total'] = sq_total
                 sq_totals.append(sq_total)
 
-            # apply question attempt rule
+            # Apply question attempt rule
             q_rule = q.get('rule', 'all')
             q_rule_count = q.get('rule_count')
             if q_rule == 'any' and isinstance(q_rule_count, int) and q_rule_count > 0:
@@ -79,7 +87,7 @@ class EvaluationResultSerializer(serializers.ModelSerializer):
                 q_total = sum(sq_totals[:q_rule_count])
             else:
                 q_total = sum(sq_totals)
-            
+
             q['obtained_total'] = q_total
             computed_total += q_total
 

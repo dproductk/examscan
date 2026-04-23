@@ -8,3 +8,7 @@ export const getEvaluation = (answerSheetId) =>
 
 export const amendMarks = (evaluationId, data) =>
   axiosInstance.patch(`/api/evaluations/${evaluationId}/amend-marks/`, data)
+
+export const saveDraft = (data) =>
+  axiosInstance.patch('/api/evaluations/draft/', data)
+

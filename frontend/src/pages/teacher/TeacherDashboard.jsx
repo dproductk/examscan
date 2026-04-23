@@ -24,10 +24,19 @@ function TeacherDashboard() {
   const [newPwd, setNewPwd] = useState('')
   const [pwdLoading, setPwdLoading] = useState(false)
   const [pwdMessage, setPwdMessage] = useState({ type: '', text: '' })
+  const [toastMessage, setToastMessage] = useState({ type: '', text: '' })
 
   useEffect(() => {
     fetchData()
   }, [])
+
+  useEffect(() => {
+    if (location.state?.bundleCompleted) {
+      setToastMessage({ type: 'success', text: 'Bundle fully evaluated!' })
+      window.history.replaceState({}, document.title)
+      setTimeout(() => setToastMessage({ type: '', text: '' }), 4000)
+    }
+  }, [location.state])
 
   const fetchData = async () => {
     setLoading(true)
@@ -79,9 +88,28 @@ function TeacherDashboard() {
     }
   }
 
+  const handleEvaluateClick = (sheet, allSheets, subjectCode) => {
+    const pendingIds = allSheets
+      .filter(s => s.status === 'assigned' || s.status === 'under_evaluation')
+      .map(s => s.id)
+
+    navigate(`/teacher/evaluate/${sheet.id}`, {
+      state: { 
+        subjectCode: subjectCode, 
+        isCompleted: sheet.status === 'completed',
+        pendingQueue: pendingIds
+      }
+    })
+  }
+
   return (
     <>
       <div className="page-container fade-in">
+        {toastMessage.text && (
+          <div className={`toast toast-${toastMessage.type === 'error' ? 'error' : 'success'}`} style={{ marginBottom: '1.5rem' }}>
+            {toastMessage.text}
+          </div>
+        )}
         <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1>Dashboard</h1>
@@ -195,7 +223,7 @@ function TeacherDashboard() {
                                             <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
                                               <button
                                                 className="btn btn-primary btn-sm"
-                                                onClick={() => navigate(`/teacher/evaluate/${sheet.id}`, { state: { subjectCode: bundle.subject_code } })}
+                                                onClick={() => handleEvaluateClick(sheet, bundleSheets, bundle.subject_code)}
                                                 id={`evaluate-sheet-${sheet.id}`}
                                               >
                                                 {sheet.status === 'completed' ? 'View Details' : 'Evaluate Paper'}

@@ -475,6 +475,7 @@ function SchemeManager() {
                           type="number"
                           value={semester}
                           onChange={e => setSemester(e.target.value)}
+                          onWheel={(e) => e.target.blur()}
                           placeholder="e.g. 5"
                           style={{ background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', width: '90px' }} 
                         />
@@ -505,6 +506,7 @@ function SchemeManager() {
                               style={{ width: '60px', padding: '0.4rem', borderRadius: '6px', border: '1px solid #cbd5e1', outline: 'none' }} 
                               value={q.rule_count} 
                               onChange={e => updateQuestion(q.id, 'rule_count', e.target.value)} 
+                              onWheel={(e) => e.target.blur()}
                               placeholder="e.g. 2"
                             />
                         )}
@@ -536,6 +538,7 @@ function SchemeManager() {
                                          style={{ width: '60px', padding: '0.4rem', borderRadius: '6px', border: '1px solid #cbd5e1', outline: 'none' }} 
                                          value={sq.rule_count} 
                                          onChange={e => updateSubQuestion(q.id, sq.id, 'rule_count', e.target.value)} 
+                                         onWheel={(e) => e.target.blur()}
                                          placeholder="e.g. 2"
                                        />
                                     )}
@@ -555,6 +558,7 @@ function SchemeManager() {
                                                 style={{ width: '48px', background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.4rem', textAlign: 'center', fontSize: '0.95rem', outline: 'none' }} 
                                                 value={p.max_marks}
                                                 placeholder=""
+                                                onWheel={(e) => e.target.blur()}
                                                 onChange={e => updatePart(q.id, sq.id, p.id, 'max_marks', e.target.value)}
                                             />
                                             <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>marks</span>

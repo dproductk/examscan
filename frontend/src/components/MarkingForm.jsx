@@ -1,14 +1,39 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 
-function MarkingForm({ sections, existingResults, onSubmit, loading }) {
+// Hide number-input spinner arrows globally for mark fields
+const spinnerStyle = `
+  input.mark-input::-webkit-outer-spin-button,
+  input.mark-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input.mark-input[type=number] { -moz-appearance: textfield; }
+`
+
+function MarkingForm({ sections, existingResults, onSubmit, loading, onMarkChange, onFormChange, isSubmitted,
+  onReEvaluate,
+  pendingQueue = [],
+  answerSheetId = null
+}) {
   // Initialize marks state from sections or existing results
   // Key format: `${q.name}_${sq.name}_${p.name}`
   const [marks, setMarks] = useState({})
   const [errors, setErrors] = useState({})
 
+  // We use a ref to track the last existingResults reference we hydrated from.
+  // This prevents re-wiping marks when EvaluationScreen re-renders for unrelated
+  // reasons (toast messages, flag menu, etc.) which would create a new array
+  // reference even though the underlying data hasn't changed.
+  const lastHydratedResultsRef = useRef(null)
+
   useEffect(() => {
     if (!sections) return
 
+    // Only re-hydrate if existingResults actually changed (new data arrived)
+    // OR if we haven't hydrated yet (first load)
+    const resultsChanged = existingResults !== lastHydratedResultsRef.current
+    if (!resultsChanged && lastHydratedResultsRef.current !== null) return
+
+    lastHydratedResultsRef.current = existingResults
+
+    // Build blank slate from marking scheme
     const initial = {}
     sections.forEach((q) => {
       q.sub_questions?.forEach((sq) => {
@@ -19,18 +44,20 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
       })
     })
 
-    // Pre-populate from existing results
-    if (existingResults) {
+    if (existingResults && existingResults.length > 0) {
+      // Overlay saved marks onto blank slate
       existingResults.forEach((q) => {
         q.sub_questions?.forEach((sq) => {
           sq.parts?.forEach((p) => {
             const key = `${q.name}_${sq.name}_${p.name}`
-            initial[key] = p.marks_obtained ?? ''
+            if (p.marks_obtained !== undefined && p.marks_obtained !== null) {
+              initial[key] = p.marks_obtained
+            }
           })
         })
       })
     }
-
+    
     setMarks(initial)
   }, [sections, existingResults])
 
@@ -39,6 +66,11 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
     const numValue = value === '' ? '' : Number(value)
 
     setMarks((prev) => ({ ...prev, [key]: numValue }))
+
+    // Notify parent so it can spawn / update / remove a badge on the PDF
+    if (onMarkChange) {
+      onMarkChange(key, numValue === '' ? 0 : numValue, maxMarks)
+    }
 
     // Validate
     if (value !== '' && (numValue < 0 || numValue > maxMarks)) {
@@ -119,8 +151,34 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
     return !hasErrors && allFilled
   }, [marks, errors, sections])
 
+  // Push changes to parent whenever marks change so it can auto-save drafts
+  useEffect(() => {
+    if (!sections || Object.keys(marks).length === 0) return
+
+    const sectionResults = sections.map((q) => ({
+      name: q.name,
+      rule: q.rule,
+      rule_count: q.rule_count,
+      sub_questions: q.sub_questions.map((sq) => ({
+        name: sq.name,
+        rule: sq.rule,
+        rule_count: sq.rule_count,
+        parts: sq.parts.map((p) => ({
+          name: p.name,
+          max_marks: p.max_marks,
+          marks_obtained: marks[`${q.name}_${sq.name}_${p.name}`] === '' ? 0 : Number(marks[`${q.name}_${sq.name}_${p.name}`]),
+        }))
+      }))
+    }))
+    
+    // Call the parent's onChange so it has the latest data for auto-saving
+    if (onFormChange) {
+      onFormChange(sectionResults, computations.grandTotal)
+    }
+  }, [marks, sections, computations.grandTotal, onFormChange])
+
   const handleSubmit = () => {
-    if (!isValid || loading) return
+    if (!isValid || loading || isSubmitted) return
 
     // Reconstruct payload mimicking sections structure
     const sectionResults = sections.map((q) => ({
@@ -142,6 +200,22 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
     onSubmit(sectionResults, computations.grandTotal)
   }
 
+  // Keyboard Shortcuts (Ctrl+S / Cmd+S / Enter to Submit)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        handleSubmit()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        handleSubmit()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isValid, loading, isSubmitted, marks, sections, computations.grandTotal, onSubmit])
+
   if (!sections || sections.length === 0) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -158,6 +232,7 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
 
   return (
     <div id="marking-form">
+      <style>{spinnerStyle}</style>
       {sections.map((q) => {
         const isExtraQ = q.rule === 'any'
         
@@ -227,17 +302,32 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
                               </div>
                               <input
                                 type="number"
-                                className="form-input"
+                                className="form-input mark-input"
                                 id={`marks-${key}`}
                                 min={0}
                                 max={p.max_marks}
                                 step={0.5}
                                 value={marks[key] ?? ''}
-                                onChange={(e) =>
-                                  handleChange(q.name, sq.name, p.name, p.max_marks, e.target.value)
-                                }
+                                disabled={isSubmitted}
+                                onWheel={(e) => e.target.blur()}
+                                onKeyDown={(e) => {
+                                  // Block minus key
+                                  if (e.key === '-' || e.key === 'e') e.preventDefault()
+                                }}
+                                onChange={(e) => {
+                                  const raw = e.target.value
+                                  // Reject negative input
+                                  if (raw !== '' && Number(raw) < 0) return
+                                  handleChange(q.name, sq.name, p.name, p.max_marks, raw)
+                                }}
                                 placeholder={`0-${p.max_marks}`}
-                                style={{ padding: '0.4rem', textAlign: 'center' }}
+                                style={{
+                                  padding: '0.4rem',
+                                  textAlign: 'center',
+                                  opacity: isSubmitted ? 0.75 : 1,
+                                  cursor: isSubmitted ? 'not-allowed' : 'text',
+                                  background: isSubmitted ? 'var(--bg-secondary)' : undefined,
+                                }}
                               />
                               {errors[key] && <div style={{ color: 'var(--color-danger)', fontSize: '0.65rem', textAlign: 'center', marginTop: '0.1rem' }}>{errors[key]}</div>}
                             </div>
@@ -271,15 +361,52 @@ function MarkingForm({ sections, existingResults, onSubmit, loading }) {
         </div>
       </div>
 
-      <button
-        className="btn btn-primary btn-lg"
-        style={{ width: '100%', marginTop: '1rem', height: '3.5rem' }}
-        onClick={handleSubmit}
-        disabled={!isValid || loading}
-        id="submit-evaluation-btn"
-      >
-        {loading ? 'Submitting...' : 'Submit Evaluation'}
-      </button>
+      {isSubmitted ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1rem' }}>
+          <div
+            style={{
+              width: '100%',
+              height: '3.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: '1rem',
+              borderRadius: 'var(--radius-md)',
+              letterSpacing: '0.02em',
+            }}
+          >
+            ✓ Submitted
+          </div>
+          <button
+            className="btn btn-secondary btn-lg"
+            style={{ width: '100%', height: '3rem' }}
+            onClick={onReEvaluate}
+            id="re-evaluate-btn"
+          >
+            🔄 Re-Evaluate
+          </button>
+        </div>
+      ) : (
+        <button
+          className="btn btn-primary btn-lg"
+          style={{ width: '100%', marginTop: '1rem', height: '3.5rem' }}
+          onClick={handleSubmit}
+          disabled={!isValid || loading}
+          id="submit-evaluation-btn"
+        >
+          {loading 
+            ? 'Submitting...' 
+            : pendingQueue.filter(id => id !== answerSheetId).length === 0 && pendingQueue.length > 0
+              ? 'Submit & Finish' 
+              : pendingQueue.length > 0 
+                ? 'Submit & Next →' 
+                : 'Submit Evaluation'}
+        </button>
+      )}
     </div>
   )
 }

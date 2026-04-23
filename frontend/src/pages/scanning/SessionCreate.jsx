@@ -224,6 +224,7 @@ function SessionCreate() {
                     className="form-input"
                     min={1}
                     value={totalSheets}
+                    onWheel={(e) => e.target.blur()}
                     onChange={(e) => setTotalSheets(e.target.value)}
                     placeholder="Number of answer sheets"
                     required
