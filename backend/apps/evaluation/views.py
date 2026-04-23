@@ -182,9 +182,6 @@ class EvaluationCreateView(APIView):
     permission_classes = [IsTeacher]
 
     def post(self, request):
-        serializer = EvaluationResultSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
         answer_sheet_id = request.data.get('answer_sheet')
         mark_positions = request.data.get('mark_positions', [])
 
@@ -197,11 +194,21 @@ class EvaluationCreateView(APIView):
             )
 
         # ── Upsert evaluation ────────────────────────────────────────────────
-        if hasattr(sheet, 'evaluation'):
-            existing = sheet.evaluation
+        # Pass the existing instance (if any) so DRF excludes it from the
+        # OneToOneField UniqueValidator and doesn't raise 400 on re-evaluation.
+        existing = getattr(sheet, 'evaluation', None)
+
+        serializer = EvaluationResultSerializer(
+            instance=existing,
+            data=request.data,
+            partial=(existing is not None),
+        )
+        serializer.is_valid(raise_exception=True)
+
+        if existing:
             old_data = EvaluationResultSerializer(existing).data
 
-            # Update existing
+            # Update existing record
             for field, value in serializer.validated_data.items():
                 setattr(existing, field, value)
             existing.mark_positions = mark_positions
@@ -370,8 +377,12 @@ class SaveEvaluationDraftView(APIView):
         except AnswerSheet.DoesNotExist:
             return Response({'error': 'Answer sheet not found.'}, status=404)
 
+        # Allow re-evaluation drafts on completed sheets (teacher re-grades).
+        # We will reset the status back to 'under_evaluation' so the final
+        # submit can mark it 'completed' again.
         if sheet.status == 'completed':
-            return Response({'error': 'Sheet already submitted.'}, status=400)
+            sheet.status = 'under_evaluation'
+            sheet.save(update_fields=['status'])
 
         # Compute total (best-effort, no validation errors raised)
         total = 0
