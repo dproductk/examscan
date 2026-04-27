@@ -54,7 +54,8 @@ class EvaluationResultSerializer(serializers.ModelSerializer):
                     marks_obtained = p.get('marks_obtained')
 
                     if marks_obtained is None:
-                        errors[f'{q_name}{sq_name}.{p_name}'] = ['marks_obtained is required.']
+                        # null = unattempted — valid, counts as 0 in total
+                        part_totals.append(0)
                         continue
 
                     if not isinstance(marks_obtained, (int, float)):

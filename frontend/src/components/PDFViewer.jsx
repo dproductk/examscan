@@ -4,6 +4,7 @@ import 'react-pdf/dist/esm/Page/AnnotationLayer.css'
 import 'react-pdf/dist/esm/Page/TextLayer.css'
 import LoadingSpinner from './LoadingSpinner'
 import MarkBadge from './MarkBadge'
+import PlacedSticker from './PlacedSticker'
 
 // Set up PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`
@@ -11,15 +12,33 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 /**
  * PDFViewer
  *
- * Props:
- *   url                  string     — PDF URL to load
- *   token                string     — Bearer token for Authorization header
- *   markPositions        object     — { [questionId]: { value, page, xPercent, yPercent } }
- *   onBadgePositionChange fn(qId, xPct, yPct, page)
- *   onBadgeRemove        fn(qId)
- *   onVisiblePageChange  fn(pageNumber) — called when the most-visible page changes
+ * Props (new click-to-mark mode):
+ *   url, token, readOnly              — unchanged
+ *   placements           object       — { [key]: { value, page, xPercent, yPercent } }
+ *   activeQuestionId     string|null
+ *   allQuestions         array        — [{ key, shortLabel, ... }]
+ *   onPdfClick           fn(page, xPct, yPct)
+ *   onStickerMove        fn(key, x, y)
+ *   onStickerRemove      fn(key)
+ *   onStickerClick       fn(key)
+ *   onStickerIncrement   fn(key)
+ *   onStickerDecrement   fn(key)
+ *   onVisiblePageChange  fn(pageNumber)
+ *   showNoQHint          bool
+ *
+ * Legacy props (readOnly / old mode):
+ *   markPositions, onBadgePositionChange, onBadgeRemove
  */
-function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBadgeRemove, onVisiblePageChange, readOnly }) {
+function PDFViewer({
+  url, token, readOnly,
+  // New click-to-mark props
+  placements = {}, activeQuestionId, allQuestions = [],
+  onPdfClick, onStickerMove, onStickerRemove, onStickerClick,
+  onStickerIncrement, onStickerDecrement,
+  onVisiblePageChange, showNoQHint,
+  // Legacy props for readOnly badge rendering
+  markPositions = {}, onBadgePositionChange, onBadgeRemove,
+}) {
   const [numPages, setNumPages] = useState(null)
   const [scale, setScale]       = useState(1.2)
   const [error, setError]       = useState(null)
@@ -123,7 +142,8 @@ function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBa
     return null
   }, [])
 
-  const badgeCount = Object.keys(markPositions).length
+  const badgeCount = readOnly ? Object.keys(markPositions).length : Object.keys(placements).length
+  const useNewMode = !readOnly
 
   return (
     <div id="pdf-viewer" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -152,27 +172,24 @@ function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBa
         </div>
       </div>
 
-      {/* Badge hint bar */}
-      {badgeCount > 0 && (
+      {/* Badge hint bar (readOnly mode only) */}
+      {readOnly && badgeCount > 0 && (
         <div style={{
-          background:  readOnly ? '#F0FFF4' : '#FFF5F5',
-          border:      `1px solid ${readOnly ? '#9AE6B4' : '#FED7D7'}`,
-          borderTop:   'none',
-          padding:     '5px 14px',
-          fontSize:    '12px',
-          color:       readOnly ? '#276749' : '#C53030',
-          display:     'flex',
-          alignItems:  'center',
-          gap:         '6px',
-          flexShrink:  0,
+          background: '#F0FFF4',
+          border: '1px solid #9AE6B4',
+          borderTop: 'none',
+          padding: '5px 14px',
+          fontSize: '12px',
+          color: '#276749',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          flexShrink: 0,
         }}>
-          <span>{readOnly ? '🟢' : '🔴'}</span>
+          <span>🟢</span>
           <span>
             <strong>{badgeCount}</strong> mark badge{badgeCount > 1 ? 's' : ''} placed
-            {readOnly
-              ? <>&nbsp;·&nbsp; <strong>read-only</strong> — click Re-Evaluate to edit</>
-              : <>&nbsp;·&nbsp; drag to any page &nbsp;·&nbsp; <strong>×</strong> to remove</>
-            }
+            &nbsp;·&nbsp; <strong>read-only</strong> — click Re-Evaluate to edit
           </span>
         </div>
       )}
@@ -201,23 +218,40 @@ function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBa
             {numPages &&
               Array.from({ length: numPages }, (_, i) => {
                 const pageNumber = i + 1
-                const pageBadges = Object.entries(markPositions).filter(
-                  ([, pos]) => pos.page === pageNumber
-                )
+
+                // Stickers for this page (new mode)
+                const pageStickers = useNewMode
+                  ? Object.entries(placements).filter(([, p]) => p !== null && p !== undefined && p.page === pageNumber)
+                  : []
+
+                // Legacy badges for readOnly mode
+                const pageBadges = readOnly
+                  ? Object.entries(markPositions).filter(([, pos]) => pos.page === pageNumber)
+                  : []
 
                 return (
                   <div
                     key={`page_${pageNumber}`}
                     ref={(el) => {
                       pageRefs.current[pageNumber] = el
-                      // Observe newly mounted page elements
                       if (el && observerRef.current) {
                         el.dataset.pageNumber = pageNumber
                         observerRef.current.observe(el)
                       }
                     }}
                     data-page-number={pageNumber}
-                    style={{ position: 'relative', display: 'inline-block', lineHeight: 0 }}
+                    style={{
+                      position: 'relative',
+                      display: 'inline-block',
+                      lineHeight: 0,
+                      cursor: (useNewMode && onPdfClick) ? 'crosshair' : 'default',
+                    }}
+                    onClick={useNewMode && onPdfClick ? (e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const xPct = Math.min(93, Math.max(2, ((e.clientX - rect.left) / rect.width) * 100))
+                      const yPct = Math.min(95, Math.max(2, ((e.clientY - rect.top) / rect.height) * 100))
+                      onPdfClick(pageNumber, xPct, yPct)
+                    } : undefined}
                   >
                     <Page
                       pageNumber={pageNumber}
@@ -227,7 +261,31 @@ function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBa
                       loading={<LoadingSpinner size={24} />}
                     />
 
-                    {/* Render badges for this page */}
+                    {/* New mode: PlacedSticker overlays */}
+                    {pageStickers.map(([qKey, p]) => {
+                      const qInfo = allQuestions.find(q => q.key === qKey)
+                      const rect = pageRefs.current[pageNumber]?.getBoundingClientRect()
+                      return (
+                        <PlacedSticker
+                          key={qKey}
+                          questionId={qKey}
+                          label={qInfo?.shortLabel || qKey}
+                          value={p.value}
+                          xPercent={p.xPercent}
+                          yPercent={p.yPercent}
+                          pageWidth={rect?.width || 600}
+                          pageHeight={rect?.height || 800}
+                          isActive={qKey === activeQuestionId}
+                          onMove={onStickerMove}
+                          onRemove={onStickerRemove}
+                          onClick={onStickerClick}
+                          onIncrement={onStickerIncrement}
+                          onDecrement={onStickerDecrement}
+                        />
+                      )
+                    })}
+
+                    {/* ReadOnly mode: legacy MarkBadge overlays */}
                     {pageBadges.map(([questionId, pos]) => (
                       <MarkBadge
                         key={questionId}
@@ -242,6 +300,22 @@ function PDFViewer({ url, token, markPositions = {}, onBadgePositionChange, onBa
                         readOnly={readOnly}
                       />
                     ))}
+
+                    {/* "Select a question first" flash hint */}
+                    {showNoQHint && (
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        pointerEvents: 'none',
+                      }}>
+                        <div style={{
+                          background: 'rgba(0,0,0,0.6)', color: '#fff',
+                          fontSize: '12px', padding: '6px 14px', borderRadius: '20px',
+                        }}>
+                          Select a question first
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}

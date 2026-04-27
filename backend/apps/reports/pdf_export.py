@@ -339,15 +339,20 @@ def _build_bundle_pdf_elements(bundle_data, styles):
                     for part in sq.get('parts', []):
                         p_name = part.get('name', '')
                         max_m = part.get('max_marks', 0)
-                        obtained = part.get('marks_obtained', 0)
+                        obtained = part.get('marks_obtained')
                         q_max_total += max_m
+
+                        if obtained is None or str(obtained).strip().lower() in ['none', 'null', '']:
+                            obtained_str = '—'
+                        else:
+                            obtained_str = str(obtained)
 
                         marks_data.append([
                             f'Q {q_name}' if first_part_of_q else '',
                             sq_name if first_part_of_sq else '',
                             p_name,
                             str(max_m),
-                            str(obtained),
+                            obtained_str,
                         ])
                         first_part_of_q = False
                         first_part_of_sq = False

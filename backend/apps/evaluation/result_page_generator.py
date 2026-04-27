@@ -263,8 +263,11 @@ def generate_result_page(
             for part in parts:
                 part_name  = part.get('name', '1')
                 max_m      = part.get('max_marks', 0)
-                obtained   = part.get('marks_obtained', 0)
-
+                obtained   = part.get('marks_obtained')
+                if obtained is None or str(obtained).strip().lower() in ['none', 'null', '']:
+                    obtained_str = '—'
+                else:
+                    obtained_str = str(obtained)
                 # Show section name only on first question of section
                 question_cell = Paragraph(
                     section_name if first_in_section else '',
@@ -281,7 +284,7 @@ def generate_result_page(
                     Paragraph(sq_name,           tbl_cell_style),
                     Paragraph(str(part_name),    tbl_cell_style),
                     Paragraph(str(max_m),        tbl_cell_style),
-                    Paragraph(str(obtained),     tbl_cell_style),
+                    Paragraph(obtained_str,      tbl_cell_style),
                 ])
                 row_styles.append(('TOPPADDING',    (0, row_index), (-1, row_index), 4))
                 row_styles.append(('BOTTOMPADDING', (0, row_index), (-1, row_index), 4))

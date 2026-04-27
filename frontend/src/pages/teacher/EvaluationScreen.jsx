@@ -5,7 +5,7 @@ import { getSheetPdfUrl, flagSheet } from '../../api/answerSheets'
 import { getEvaluation, submitEvaluation, saveDraft } from '../../api/evaluations'
 import { getMarkingSchemes } from '../../api/markingSchemes'
 import PDFViewer from '../../components/PDFViewer'
-import MarkingForm from '../../components/MarkingForm'
+import QuestionMarkRow from '../../components/QuestionMarkRow'
 import LoadingSpinner from '../../components/LoadingSpinner'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -30,12 +30,7 @@ function EvaluationScreen() {
   const [loading,        setLoading]        = useState(true)
   const [submitting,     setSubmitting]     = useState(false)
   const [message,        setMessage]        = useState({ type: '', text: '' })
-
-  // Whether this sheet has already been submitted (completed)
-  // Initialise immediately from navigation state so there's no flicker
-  // even before the evaluation API responds.
   const [isSubmitted, setIsSubmitted] = useState(!!location.state?.isCompleted)
-  // URL of the marked (annotated) PDF — set after submission or when loading a completed sheet
   const [markedPdfUrl, setMarkedPdfUrl] = useState(null)
 
   // Flag state
@@ -43,36 +38,70 @@ function EvaluationScreen() {
   const [flagReason,   setFlagReason]   = useState('')
   const [flagging,     setFlagging]     = useState(false)
 
-  // ── Mark badge state ─────────────────────────────────────────────────────
-  // { [compositeKey]: { value, page, xPercent, yPercent } }
-  // compositeKey = "${q.name}_${sq.name}_${p.name}"
-  const [markPositions, setMarkPositions] = useState({})
+  // ── Click-to-mark state ───────────────────────────────────────────────────
+  const [activeQuestionId, setActiveQuestionId] = useState(null)
+  const [placements, setPlacements] = useState({})
+  // { [compositeKey]: { value, page, xPercent, yPercent } | null }
+  const [showNoQHint, setShowNoQHint] = useState(false)
+  const [lastSaved, setLastSaved] = useState(null)
 
-  // Keep a stable ref to the latest sectionResults so the auto-save
-  // interval can read it without needing it in its dependency array.
-  const sectionResultsRef = useRef([])
-
-  // Stable reference for section_results — avoids triggering MarkingForm
-  // re-initialisation on every parent render (e.g. toast, flag menu toggles).
-  // Only changes when the actual data object changes.
-  const existingSectionResults = useMemo(
-    () => existingResult?.section_results ?? null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [existingResult]
-  )
-
-  // Track which PDF page is most visible — new badges spawn at its centre
+  // Track visible PDF page
   const visiblePageRef = useRef(1)
   const handleVisiblePageChange = useCallback((page) => {
     visiblePageRef.current = page
   }, [])
+
+  // Flatten all question parts from the marking scheme
+  const allQuestions = useMemo(() => {
+    if (!scheme?.sections) return []
+    const qs = []
+    scheme.sections.forEach(q => {
+      q.sub_questions?.forEach(sq => {
+        sq.parts?.forEach(p => {
+          qs.push({
+            key: `${q.name}_${sq.name}_${p.name}`,
+            label: `${q.name} · ${sq.name} · ${p.name}`,
+            shortLabel: `${sq.name}·${p.name}`,
+            maxMarks: p.max_marks,
+            sectionName: q.name,
+            sqName: sq.name,
+            partName: p.name,
+            qRule: q.rule,
+            qRuleCount: q.rule_count,
+            sqRule: sq.rule,
+            sqRuleCount: sq.rule_count,
+          })
+        })
+      })
+    })
+    return qs
+  }, [scheme])
+
+  const totalQuestions = allQuestions.length
+  const markedCount = Object.values(placements).filter(p => p !== null && p !== undefined).length
+  const unattemptedCount = totalQuestions - markedCount
+  const totalMarks = Object.values(placements)
+    .filter(p => p !== null && p !== undefined)
+    .reduce((sum, p) => sum + p.value, 0)
+
+  // Group questions by section for rendering
+  const sectionGroups = useMemo(() => {
+    if (!scheme?.sections) return []
+    return scheme.sections.map(q => ({
+      name: q.name,
+      rule: q.rule,
+      ruleCount: q.rule_count,
+      questions: allQuestions.filter(aq => aq.sectionName === q.name),
+    }))
+  }, [scheme, allQuestions])
 
   // ── Load data ─────────────────────────────────────────────────────────────
   useEffect(() => {
     // Reset state immediately on ID change so old data doesn't bleed into the next paper
     setExistingResult(null)
     setMarkedPdfUrl(null)
-    setMarkPositions({})
+    setPlacements({})
+    setActiveQuestionId(null)
     setIsSubmitted(!!location.state?.isCompleted)
     setMessage({ type: '', text: '' })
     setLoading(true)
@@ -117,7 +146,7 @@ function EvaluationScreen() {
             setMarkedPdfUrl(`${BASE_URL}/api/evaluations/${result.id}/marked-pdf/`)
           }
 
-          // ── Pre-populate badge positions from saved data ─────────────────
+          // ── Pre-populate placements from saved data ───────────────────
           if (result.mark_positions && result.mark_positions.length > 0) {
             const populated = {}
             result.mark_positions.forEach((pos) => {
@@ -128,7 +157,7 @@ function EvaluationScreen() {
                 yPercent: pos.y_percent,
               }
             })
-            setMarkPositions(populated)
+            setPlacements(populated)
           }
         } catch {
           // No existing evaluation — fine
@@ -143,119 +172,183 @@ function EvaluationScreen() {
     fetchData()
   }, [id, location.state])
 
-  // ── Badge helpers ─────────────────────────────────────────────────────────
+  // ── Click-to-mark handlers ─────────────────────────────────────────────
 
-  /**
-   * Called by MarkingForm whenever a mark input changes.
-   * Spawns a new badge on page 1 at a default position if value > 0,
-   * preserving existing drag position if the badge already exists.
-   * Removes the badge if value === 0.
-   */
-  const handleMarkChange = useCallback((key, value) => {
-    setMarkPositions((prev) => {
-      if (value > 0) {
-        return {
-          ...prev,
-          [key]: {
-            value,
-            // Preserve existing position if badge already placed;
-            // otherwise spawn at centre of the currently visible page
-            page:     prev[key]?.page     ?? visiblePageRef.current,
-            xPercent: prev[key]?.xPercent ?? 50,
-            yPercent: prev[key]?.yPercent ?? 50,
-          },
+  // Set first question active once scheme loads
+  useEffect(() => {
+    if (allQuestions.length > 0 && !activeQuestionId && !isSubmitted) {
+      setActiveQuestionId(allQuestions[0].key)
+    }
+  }, [allQuestions, activeQuestionId, isSubmitted])
+
+  const handleIncrement = useCallback((qKey) => {
+    const q = allQuestions.find(q => q.key === qKey)
+    if (!q) return
+    setPlacements(prev => {
+      const cur = prev[qKey]
+      if (cur === null || cur === undefined) {
+        return { ...prev, [qKey]: { value: 1, page: visiblePageRef.current, xPercent: 5, yPercent: 10 } }
+      }
+      if (cur.value >= q.maxMarks) return prev
+      return { ...prev, [qKey]: { ...cur, value: cur.value + 0.5 } }
+    })
+  }, [allQuestions])
+
+  const handleDecrement = useCallback((qKey) => {
+    setPlacements(prev => {
+      const cur = prev[qKey]
+      if (!cur) return prev
+      if (cur.value <= 0) return prev
+      return { ...prev, [qKey]: { ...cur, value: cur.value - 0.5 } }
+    })
+  }, [])
+
+  const handleClear = useCallback((qKey) => {
+    setPlacements(prev => {
+      const next = { ...prev }
+      delete next[qKey]
+      return next
+    })
+  }, [])
+
+  const handleManualInput = useCallback((qKey, value) => {
+    setPlacements(prev => {
+      const cur = prev[qKey]
+      return {
+        ...prev,
+        [qKey]: {
+          value,
+          page: cur?.page ?? visiblePageRef.current,
+          xPercent: cur?.xPercent ?? 5,
+          yPercent: cur?.yPercent ?? 10,
         }
       }
-      // Remove badge when mark is 0
-      const next = { ...prev }
-      delete next[key]
-      return next
     })
   }, [])
 
-  const handleFormChange = useCallback((sectionResults) => {
-    sectionResultsRef.current = sectionResults
-  }, [])
+  const handleQuestionClick = useCallback((qKey, source) => {
+    if (source === 'tab') {
+      const idx = allQuestions.findIndex(q => q.key === qKey)
+      const next = allQuestions[idx + 1]
+      if (next) setActiveQuestionId(next.key)
+    } else {
+      setActiveQuestionId(qKey)
+    }
+  }, [allQuestions])
 
-  /**
-   * Called by MarkBadge (via PDFViewer) when a badge is dragged to a new position.
-   * Works across any page thanks to PDFViewer's getPageAtPoint.
-   */
-  const handleBadgePositionChange = useCallback((questionId, xPercent, yPercent, page) => {
-    setMarkPositions((prev) => ({
+  // PDF click — place or move sticker
+  const handlePdfClick = useCallback((pageNumber, xPct, yPct) => {
+    if (!activeQuestionId) {
+      setShowNoQHint(true)
+      setTimeout(() => setShowNoQHint(false), 1500)
+      return
+    }
+    setPlacements(prev => {
+      const existing = prev[activeQuestionId]
+      if (existing === null || existing === undefined) {
+        return { ...prev, [activeQuestionId]: { value: 0, page: pageNumber, xPercent: xPct, yPercent: yPct } }
+      }
+      return { ...prev, [activeQuestionId]: { ...existing, page: pageNumber, xPercent: xPct, yPercent: yPct } }
+    })
+  }, [activeQuestionId])
+
+  // Sticker move (drag)
+  const handleStickerMove = useCallback((qKey, newX, newY) => {
+    setPlacements(prev => ({
       ...prev,
-      [questionId]: {
-        ...prev[questionId],
-        xPercent,
-        yPercent,
-        page,
-      },
+      [qKey]: { ...prev[qKey], xPercent: newX, yPercent: newY }
     }))
   }, [])
 
-  /**
-   * Called when the teacher clicks × on a badge.
-   * Removes badge display only — does NOT remove the mark value.
-   */
-  const handleBadgeRemove = useCallback((questionId) => {
-    setMarkPositions((prev) => {
-      const next = { ...prev }
-      delete next[questionId]
-      return next
-    })
+  // Tab key navigation
+  useEffect(() => {
+    const handleGlobalTab = (e) => {
+      if (e.key === 'Tab' && !e.target.matches('input')) {
+        e.preventDefault()
+        const idx = allQuestions.findIndex(q => q.key === activeQuestionId)
+        const next = allQuestions[idx + 1]
+        if (next) setActiveQuestionId(next.key)
+      }
+    }
+    window.addEventListener('keydown', handleGlobalTab)
+    return () => window.removeEventListener('keydown', handleGlobalTab)
+  }, [activeQuestionId, allQuestions])
+
+  /** Convert placements → API payload */
+  const buildMarkPositionsPayload = useCallback((pos) => {
+    return Object.entries(pos)
+      .filter(([, p]) => p !== null && p !== undefined)
+      .map(([question_id, p]) => ({
+        question_id,
+        value: p.value,
+        page: p.page,
+        x_percent: p.xPercent,
+        y_percent: p.yPercent,
+      }))
   }, [])
 
-  /** Convert markPositions state → API payload format */
-  const buildMarkPositionsPayload = useCallback((positions) => {
-    return Object.entries(positions).map(([question_id, pos]) => ({
-      question_id,
-      value:     pos.value,
-      page:      pos.page,
-      x_percent: pos.xPercent,
-      y_percent: pos.yPercent,
+  /** Build section_results from placements for submit/draft */
+  const buildSectionResults = useCallback(() => {
+    if (!scheme?.sections) return []
+    return scheme.sections.map(q => ({
+      name: q.name,
+      rule: q.rule,
+      rule_count: q.rule_count,
+      sub_questions: q.sub_questions.map(sq => ({
+        name: sq.name,
+        rule: sq.rule,
+        rule_count: sq.rule_count,
+        parts: sq.parts.map(p => {
+          const key = `${q.name}_${sq.name}_${p.name}`
+          const pl = placements[key]
+          return {
+            name: p.name,
+            max_marks: p.max_marks,
+            marks_obtained: (pl !== null && pl !== undefined) ? pl.value : null,
+          }
+        })
+      }))
     }))
-  }, [])
+  }, [scheme, placements])
 
   // ── Auto-save draft ───────────────────────────────────────────────────────
   const draftSaving = useRef(false)
 
-  const triggerDraftSave = useCallback(async (currentPositions) => {
+  const triggerDraftSave = useCallback(async () => {
     if (draftSaving.current) return
-    const sr = sectionResultsRef.current
+    const sr = buildSectionResults()
     if (!sr || sr.length === 0) return
-
     draftSaving.current = true
     try {
       await saveDraft({
-        answer_sheet:   parseInt(id),
+        answer_sheet: parseInt(id),
         section_results: sr,
-        mark_positions: buildMarkPositionsPayload(currentPositions),
+        mark_positions: buildMarkPositionsPayload(placements),
       })
+      setLastSaved(new Date())
     } catch {
-      // Silent fail — draft is best-effort
+      // Silent fail
     } finally {
       draftSaving.current = false
     }
-  }, [id, buildMarkPositionsPayload])
+  }, [id, buildSectionResults, buildMarkPositionsPayload, placements])
 
-  // Auto-save every 30 s — but not when the sheet is already submitted
   useEffect(() => {
     const interval = setInterval(() => {
-      if (!isSubmitted) triggerDraftSave(markPositions)
+      if (!isSubmitted) triggerDraftSave()
     }, 30000)
     return () => clearInterval(interval)
-  }, [markPositions, triggerDraftSave, isSubmitted])
+  }, [triggerDraftSave, isSubmitted])
 
   // Save on tab/window close
   useEffect(() => {
     const handleUnload = () => {
-      // Use sendBeacon for reliable fire-and-forget on unload
       const token = sessionStorage.getItem('access_token')
-      const base  = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
-      const body  = JSON.stringify({
-        answer_sheet:    parseInt(id),
-        section_results: sectionResultsRef.current,
-        mark_positions:  buildMarkPositionsPayload(markPositions),
+      const base = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+      const body = JSON.stringify({
+        answer_sheet: parseInt(id),
+        section_results: buildSectionResults(),
+        mark_positions: buildMarkPositionsPayload(placements),
       })
       navigator.sendBeacon &&
         navigator.sendBeacon(
@@ -265,26 +358,25 @@ function EvaluationScreen() {
     }
     window.addEventListener('beforeunload', handleUnload)
     return () => window.removeEventListener('beforeunload', handleUnload)
-  }, [id, markPositions, buildMarkPositionsPayload])
+  }, [id, placements, buildSectionResults, buildMarkPositionsPayload])
 
   // ── Submit ────────────────────────────────────────────────────────────────
-  const handleSubmit = async (sectionResults, grandTotal) => {
-    sectionResultsRef.current = sectionResults
+  const handleSubmit = async () => {
     setSubmitting(true)
     setMessage({ type: '', text: '' })
+    const sectionResults = buildSectionResults()
 
     try {
       const payload = {
         answer_sheet:           parseInt(id),
         section_results:        sectionResults,
         pdf_version_at_grading: 1,
-        mark_positions:         buildMarkPositionsPayload(markPositions),
+        mark_positions:         buildMarkPositionsPayload(placements),
       }
 
       const res = await submitEvaluation(payload)
       const result = res.data
       setExistingResult(result)
-      // Mark as submitted and set marked PDF URL if available
       setIsSubmitted(true)
       if (result.marked_pdf_path) {
         setMarkedPdfUrl(`${BASE_URL}/api/evaluations/${result.id}/marked-pdf/`)
@@ -299,12 +391,9 @@ function EvaluationScreen() {
           state: { ...location.state, pendingQueue: remainingQueue }
         })
       } else if (pendingQueue.includes(answerSheetId)) {
-        // Only redirect to dashboard if we actually came from the queue and finished it
-        navigate('/teacher/dashboard', {
-          state: { bundleCompleted: true }
-        })
+        navigate('/teacher/dashboard', { state: { bundleCompleted: true } })
       } else {
-        setMessage({ type: 'success', text: `✓ Evaluation submitted! Total: ${grandTotal} marks. Annotated PDF is being generated.` })
+        setMessage({ type: 'success', text: `✓ Evaluation submitted! Total: ${totalMarks} marks.` })
       }
     } catch (err) {
       const errData = err.response?.data
@@ -319,12 +408,6 @@ function EvaluationScreen() {
     } finally {
       setSubmitting(false)
     }
-  }
-
-  // Intercept MarkingForm's onSubmit to capture section_results for auto-save
-  const handleFormSubmit = (sectionResults, grandTotal) => {
-    sectionResultsRef.current = sectionResults
-    handleSubmit(sectionResults, grandTotal)
   }
 
   // ── Re-Evaluate ───────────────────────────────────────────────────────────
@@ -473,47 +556,169 @@ function EvaluationScreen() {
 
       {/* Split layout */}
       <div className="split-layout">
-        {/* Left: PDF Viewer with badge overlays */}
+        {/* Left: PDF Viewer with sticker overlays */}
         <div className="panel-left">
           <PDFViewer
             url={pdfUrl}
             token={accessToken}
-            markPositions={(isSubmitted && markedPdfUrl) ? {} : markPositions}
-            onBadgePositionChange={handleBadgePositionChange}
-            onBadgeRemove={handleBadgeRemove}
+            placements={(isSubmitted && markedPdfUrl) ? {} : placements}
+            activeQuestionId={activeQuestionId}
+            allQuestions={allQuestions}
+            onPdfClick={isSubmitted ? undefined : handlePdfClick}
+            onStickerMove={handleStickerMove}
+            onStickerRemove={handleClear}
+            onStickerClick={(qKey) => setActiveQuestionId(qKey)}
+            onStickerIncrement={handleIncrement}
+            onStickerDecrement={handleDecrement}
             onVisiblePageChange={handleVisiblePageChange}
+            showNoQHint={showNoQHint}
             readOnly={isSubmitted}
           />
         </div>
 
-        {/* Right: Marking Form */}
-        <div className="panel-right">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h2 style={{ fontSize: 'var(--font-size-xl)', fontWeight: 700, margin: 0 }}>
-              Evaluation
-            </h2>
+        {/* Right: Click-to-mark panel */}
+        <div className="panel-right" style={{ display: 'flex', flexDirection: 'column', padding: 0 }}>
+          {/* Sticky header */}
+          <div style={{
+            padding: '14px 16px',
+            borderBottom: '1px solid var(--border-color)',
+            background: 'var(--bg-secondary)',
+            position: 'sticky', top: 0, zIndex: 10,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>Marking scheme</span>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: '#1D9E75' }}>{markedCount} / {totalQuestions}</span>
+            </div>
+            {lastSaved && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                · Auto-saved {Math.round((Date.now() - lastSaved.getTime()) / 1000)}s ago
+              </div>
+            )}
             {pendingQueue.length > 0 && (
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '3px' }}>
                 Sheet {pendingQueue.indexOf(parseInt(id)) + 1} of {pendingQueue.length}
-              </span>
+              </div>
             )}
           </div>
-          {scheme ? (
-            <MarkingForm
-              sections={scheme.sections}
-              existingResults={existingSectionResults}
-              onSubmit={handleFormSubmit}
-              loading={submitting}
-              onMarkChange={handleMarkChange}
-              onFormChange={handleFormChange}
-              isSubmitted={isSubmitted}
-              onReEvaluate={handleReEvaluate}
-              pendingQueue={pendingQueue}
-              answerSheetId={parseInt(id)}
-            />
-          ) : (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '3rem' }}>
-              No marking scheme found. Contact the exam department.
+
+          {/* Hint bar */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '8px 16px',
+            background: activeQuestionId ? '#E1F5EE' : '#FFF8E1',
+            borderBottom: `1px solid ${activeQuestionId ? '#5DCAA5' : '#FFE082'}`,
+            fontSize: '13px',
+            color: activeQuestionId ? '#085041' : '#F57F17',
+          }}>
+            <span>
+              {activeQuestionId
+                ? `${allQuestions.find(q => q.key === activeQuestionId)?.label || activeQuestionId} — click PDF to place sticker`
+                : 'Select a question to begin marking'
+              }
+            </span>
+          </div>
+
+          {/* Scrollable question list */}
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {scheme ? sectionGroups.map(section => {
+              const sectionTotal = section.questions.reduce((sum, q) => {
+                const p = placements[q.key]
+                return sum + ((p !== null && p !== undefined) ? p.value : 0)
+              }, 0)
+              const sectionMax = section.questions.reduce((sum, q) => sum + q.maxMarks, 0)
+
+              return (
+                <div key={section.name}>
+                  {/* Section header */}
+                  <div style={{
+                    padding: '10px 16px',
+                    background: 'var(--bg-primary)',
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      {section.name}
+                      {section.rule === 'any' && <span style={{ fontWeight: 400, marginLeft: '6px', fontSize: '12px' }}>Any {section.ruleCount}</span>}
+                    </span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#1D9E75' }}>
+                      {sectionTotal} / {sectionMax}
+                    </span>
+                  </div>
+
+                  {/* Question rows */}
+                  {section.questions.map(q => (
+                    <QuestionMarkRow
+                      key={q.key}
+                      questionId={q.key}
+                      label={q.label}
+                      maxMarks={q.maxMarks}
+                      placement={placements[q.key] ?? null}
+                      isActive={activeQuestionId === q.key}
+                      onClick={(src) => handleQuestionClick(q.key, src)}
+                      onIncrement={() => handleIncrement(q.key)}
+                      onDecrement={() => handleDecrement(q.key)}
+                      onClear={() => handleClear(q.key)}
+                      onManualInput={(v) => handleManualInput(q.key, v)}
+                    />
+                  ))}
+                </div>
+              )
+            }) : (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '3rem' }}>
+                No marking scheme found. Contact the exam department.
+              </div>
+            )}
+          </div>
+
+          {/* Sticky footer */}
+          {scheme && (
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                <span>{markedCount} marked</span>
+                <span>{unattemptedCount} unattempted</span>
+                <span>Total: {totalMarks}</span>
+              </div>
+
+              {unattemptedCount > 0 && (
+                <div style={{
+                  padding: '8px 12px', background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
+                  fontSize: '13px', color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '8px',
+                }}>
+                  {unattemptedCount} unattempted — will show as — in results
+                </div>
+              )}
+
+              {isSubmitted ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{
+                    width: '100%', padding: '12px', textAlign: 'center',
+                    background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: '#fff',
+                    fontWeight: 700, fontSize: '15px', borderRadius: 'var(--radius-md)',
+                  }}>✓ Submitted</div>
+                  <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleReEvaluate}>
+                    🔄 Re-Evaluate
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={markedCount === 0 || submitting}
+                  style={{
+                    width: '100%', padding: '12px',
+                    background: markedCount > 0 ? '#1D9E75' : 'var(--bg-primary)',
+                    color: markedCount > 0 ? '#fff' : 'var(--text-muted)',
+                    border: 'none', borderRadius: 'var(--radius-md)',
+                    fontSize: '15px', fontWeight: '600',
+                    cursor: markedCount > 0 ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {submitting ? 'Submitting...'
+                    : pendingQueue.filter(qid => qid !== parseInt(id)).length === 0 && pendingQueue.length > 0
+                      ? 'Submit & Finish'
+                      : pendingQueue.length > 0 ? 'Submit & Next →' : 'Submit Evaluation'}
+                </button>
+              )}
             </div>
           )}
         </div>
