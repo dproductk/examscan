@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { getSheetPdfUrl, flagSheet } from '../../api/answerSheets'
-import { getEvaluation, submitEvaluation, saveDraft } from '../../api/evaluations'
+import { getEvaluation, submitEvaluation, saveDraft, verifyHighScore, correctCriticalMarks } from '../../api/evaluations'
+import { getCriticalAssessmentStatus } from '../../api/moderation'
 import { getMarkingSchemes } from '../../api/markingSchemes'
 import { API_BASE_URL } from '../../api/config'
 import PDFViewer from '../../components/PDFViewer'
@@ -22,7 +23,7 @@ function EvaluationScreen() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const { pendingQueue = [], role: evalRole = 'assessor' } = location.state || {}
+  const { pendingQueue = [], role: evalRole = 'assessor', assessmentType } = location.state || {}
 
   const [scheme,         setScheme]         = useState(null)
   const [existingResult, setExistingResult] = useState(null)
@@ -43,6 +44,13 @@ function EvaluationScreen() {
   // { [compositeKey]: { value, page, xPercent, yPercent } | null }
   const [showNoQHint, setShowNoQHint] = useState(false)
   const [lastSaved, setLastSaved] = useState(null)
+
+  // Critical assessment state
+  const [assessorSectionResults, setAssessorSectionResults] = useState(null)
+  const [assessorMarksMap, setAssessorMarksMap] = useState({})  // { questionKey: marksValue }
+  const [assessorTotal, setAssessorTotal] = useState(null)
+  const [changedQuestions, setChangedQuestions] = useState({})
+  const [correctionInfo, setCorrectionInfo] = useState(null) // { changed_questions } from verification
 
   // Track visible PDF page
   const visiblePageRef = useRef(1)
@@ -160,6 +168,64 @@ function EvaluationScreen() {
           }
         } catch {
           // No existing evaluation — fine
+        }
+
+        // High-score verify mode: load assessor's data
+        if (assessmentType === 'high_score' && evalRole === 'moderator') {
+          try {
+            const assessorRes = await getEvaluation(id, 'assessor')
+            const assessorData = assessorRes.data
+            setAssessorSectionResults(assessorData.section_results)
+            setAssessorTotal(assessorData.total_marks)
+
+            // Build flat map of assessor marks per question key for display
+            const marksMap = {}
+            if (assessorData.section_results) {
+              assessorData.section_results.forEach(q => {
+                q.sub_questions?.forEach(sq => {
+                  sq.parts?.forEach(p => {
+                    const key = `${q.name}_${sq.name}_${p.name}`
+                    marksMap[key] = p.marks_obtained
+                  })
+                })
+              })
+            }
+            setAssessorMarksMap(marksMap)
+
+            // Load assessor's annotated PDF
+            if (assessorData.marked_pdf_path) {
+              setMarkedPdfUrl(`${API_BASE_URL}/api/evaluations/${assessorData.id}/marked-pdf/`)
+            }
+            // Pre-populate placements from assessor's marks if no moderator eval exists
+            if (!existingResult && assessorData.mark_positions?.length > 0) {
+              const populated = {}
+              assessorData.mark_positions.forEach((pos) => {
+                populated[pos.question_id] = {
+                  value: pos.value, page: pos.page,
+                  xPercent: pos.x_percent, yPercent: pos.y_percent,
+                }
+              })
+              setPlacements(populated)
+            }
+          } catch { /* no assessor eval */ }
+        }
+
+        // Correction mode: load verification info
+        if (assessmentType === 'correction' && evalRole === 'assessor') {
+          try {
+            const sheet = (await import('../../api/answerSheets')).then(m => m.getAnswerSheets())
+            // Get critical status to find changed_questions
+            const sheetsRes = await (await import('../../api/answerSheets')).getAnswerSheets()
+            const allSheets = sheetsRes.data.results || sheetsRes.data || []
+            const currentSheet = allSheets.find(s => s.id === parseInt(id))
+            if (currentSheet) {
+              const critRes = await getCriticalAssessmentStatus(currentSheet.bundle)
+              const paper = critRes.data?.papers?.find(p => p.paper_id === parseInt(id))
+              if (paper?.verification?.changed_questions) {
+                setCorrectionInfo(paper.verification)
+              }
+            }
+          } catch { /* correction info not available */ }
         }
       } catch {
         setMessage({ type: 'error', text: 'Failed to load evaluation data.' })
@@ -367,6 +433,28 @@ function EvaluationScreen() {
     const sectionResults = buildSectionResults()
 
     try {
+      let res
+
+      if (assessmentType === 'high_score' && evalRole === 'moderator') {
+        // High-score verification submit
+        res = await verifyHighScore(parseInt(id), { section_results: sectionResults })
+        setMessage({ type: 'success', text: `✓ Verification submitted! Total: ${res.data.total_marks}` })
+        setTimeout(() => navigate('/teacher/dashboard'), 1500)
+        return
+      }
+
+      if (assessmentType === 'correction' && evalRole === 'assessor') {
+        // Correction submit
+        res = await correctCriticalMarks(parseInt(id), {
+          section_results: sectionResults,
+          mark_positions: buildMarkPositionsPayload(placements),
+        })
+        setMessage({ type: 'success', text: `✓ Correction submitted! Total: ${res.data.total_marks}` })
+        setTimeout(() => navigate('/teacher/dashboard'), 1500)
+        return
+      }
+
+      // Normal evaluation flow
       const payload = {
         answer_sheet:           parseInt(id),
         section_results:        sectionResults,
@@ -375,10 +463,9 @@ function EvaluationScreen() {
         role:                   evalRole,
       }
 
-      const res = await submitEvaluation(payload)
+      res = await submitEvaluation(payload)
       const result = res.data
       
-      // Navigate immediately — don't wait for PDF generation in background
       const answerSheetId = parseInt(id)
       const remainingQueue = pendingQueue.filter(qId => qId !== answerSheetId)
 
@@ -442,7 +529,9 @@ function EvaluationScreen() {
 
   // When submitted and a marked PDF exists, show the annotated version.
   // Otherwise, fallback to the original PDF.
-  const pdfUrl = (isSubmitted && markedPdfUrl) ? markedPdfUrl : getSheetPdfUrl(id)
+  const pdfUrl = (assessmentType === 'high_score' && markedPdfUrl) ? markedPdfUrl
+    : (isSubmitted && markedPdfUrl) ? markedPdfUrl
+    : getSheetPdfUrl(id)
 
   return (
     <>
@@ -468,7 +557,9 @@ function EvaluationScreen() {
             ← Back
           </button>
           <span className="logo" style={{ fontSize: '1.25rem', fontWeight: 800 }}>
-            {evalRole === 'moderator' ? '🔍 Moderation Mode' : 'Evaluation Mode'}
+            {assessmentType === 'high_score' ? '⚡ High-Score Verification'
+              : assessmentType === 'correction' ? '🔧 Critical Correction'
+              : evalRole === 'moderator' ? '🔍 Moderation Mode' : 'Evaluation Mode'}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -586,7 +677,18 @@ function EvaluationScreen() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>Marking scheme</span>
-              <span style={{ fontSize: '14px', fontWeight: 600, color: '#1D9E75' }}>{markedCount} / {totalQuestions}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {assessmentType === 'high_score' && assessorTotal !== null && (
+                  <span style={{
+                    fontSize: '12px', fontWeight: 600,
+                    color: '#6366F1', background: '#EEF2FF',
+                    padding: '2px 8px', borderRadius: '4px',
+                  }}>
+                    Assessor: {assessorTotal}
+                  </span>
+                )}
+                <span style={{ fontSize: '14px', fontWeight: 600, color: '#1D9E75' }}>{markedCount} / {totalQuestions}</span>
+              </div>
             </div>
             {lastSaved && (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
@@ -645,22 +747,43 @@ function EvaluationScreen() {
                   </div>
 
                   {/* Question rows */}
-                  {section.questions.map(q => (
-                    <QuestionMarkRow
-                      key={q.key}
-                      questionId={q.key}
-                      label={q.label}
-                      maxMarks={q.maxMarks}
-                      placement={placements[q.key] ?? null}
-                      isActive={activeQuestionId === q.key}
-                      onClick={isSubmitted ? undefined : (src) => handleQuestionClick(q.key, src)}
-                      onIncrement={isSubmitted ? undefined : () => handleIncrement(q.key)}
-                      onDecrement={isSubmitted ? undefined : () => handleDecrement(q.key)}
-                      onClear={isSubmitted ? undefined : () => handleClear(q.key)}
-                      onManualInput={isSubmitted ? undefined : (v) => handleManualInput(q.key, v)}
-                      disabled={isSubmitted}
-                    />
-                  ))}
+                  {section.questions.map(q => {
+                    // Correction mode: lock questions where assessor & moderator agree
+                    const isCorrectionLocked = assessmentType === 'correction' && correctionInfo?.changed_questions
+                      && !correctionInfo.changed_questions[q.label]
+                    const modHint = correctionInfo?.changed_questions?.[q.label]
+                      ? `Moderator gave: ${correctionInfo.changed_questions[q.label].moderator_marks}`
+                      : null
+                    // High-score mode: show assessor's mark as reference
+                    const assessorMark = assessmentType === 'high_score'
+                      ? assessorMarksMap[q.key]
+                      : undefined
+                    const assessorHint = assessorMark !== undefined && assessorMark !== null
+                      ? `Assessor: ${assessorMark}`
+                      : (assessmentType === 'high_score' ? 'Assessor: —' : null)
+                    const isHighlighted = assessmentType === 'high_score' && assessorSectionResults
+                      && placements[q.key] !== undefined
+                    const effectiveDisabled = isSubmitted || isCorrectionLocked
+
+                    return (
+                      <QuestionMarkRow
+                        key={q.key}
+                        questionId={q.key}
+                        label={q.label}
+                        maxMarks={q.maxMarks}
+                        placement={placements[q.key] ?? null}
+                        isActive={activeQuestionId === q.key}
+                        onClick={effectiveDisabled ? undefined : (src) => handleQuestionClick(q.key, src)}
+                        onIncrement={effectiveDisabled ? undefined : () => handleIncrement(q.key)}
+                        onDecrement={effectiveDisabled ? undefined : () => handleDecrement(q.key)}
+                        onClear={effectiveDisabled ? undefined : () => handleClear(q.key)}
+                        onManualInput={effectiveDisabled ? undefined : (v) => handleManualInput(q.key, v)}
+                        disabled={effectiveDisabled}
+                        moderatorHint={modHint || assessorHint}
+                        highlighted={!!modHint}
+                      />
+                    )
+                  })}
                 </div>
               )
             }) : (
@@ -706,7 +829,9 @@ function EvaluationScreen() {
                   disabled={markedCount === 0 || submitting}
                   style={{
                     width: '100%', padding: '12px',
-                    background: markedCount > 0 ? '#1D9E75' : 'var(--bg-primary)',
+                    background: markedCount > 0
+                      ? (assessmentType === 'high_score' || assessmentType === 'correction' ? '#D97706' : '#1D9E75')
+                      : 'var(--bg-primary)',
                     color: markedCount > 0 ? '#fff' : 'var(--text-muted)',
                     border: 'none', borderRadius: 'var(--radius-md)',
                     fontSize: '15px', fontWeight: '600',
@@ -714,6 +839,8 @@ function EvaluationScreen() {
                   }}
                 >
                   {submitting ? 'Submitting...'
+                    : assessmentType === 'high_score' ? 'Submit Verification'
+                    : assessmentType === 'correction' ? 'Submit Correction'
                     : pendingQueue.filter(qid => qid !== parseInt(id)).length === 0 && pendingQueue.length > 0
                       ? 'Submit & Finish'
                       : pendingQueue.length > 0 ? 'Submit & Next →' : 'Submit Evaluation'}

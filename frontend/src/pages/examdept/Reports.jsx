@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getReportsSummary, exportExcel, exportStudentPdf, exportAllPdfs, exportBundlePdf, getBundlesForReport } from '../../api/reports'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import DownloadMarkedPDFsButton from '../../components/DownloadMarkedPDFsButton'
+import DownloadModerationReportButton from '../../components/DownloadModerationReportButton'
 
 function Reports() {
   const [students, setStudents] = useState([])
@@ -260,6 +261,12 @@ function Reports() {
                           bundleId={bundle.id}
                           completedCount={bundle.graded_count || 0}
                         />
+                        {bundle.moderation_assignment && bundle.moderation_assignment.moderator_id && (
+                          <DownloadModerationReportButton 
+                            bundleId={bundle.id} 
+                            disabled={!bundle.moderation_assignment.moderation_completed} 
+                          />
+                        )}
                       </div>
                     </td>
                   </tr>

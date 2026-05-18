@@ -6,6 +6,7 @@ import { assignBundleModeration } from '../../api/moderation'
 import axiosInstance from '../../api/axiosInstance'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import DownloadMarkedPDFsButton from '../../components/DownloadMarkedPDFsButton'
+import DownloadModerationReportButton from '../../components/DownloadModerationReportButton'
 
 function ExamDashboard() {
   const { user } = useAuth()
@@ -218,6 +219,9 @@ function ExamDashboard() {
                                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                                     {getModerationBadge(bundle)}
                                     <DownloadMarkedPDFsButton bundleId={bundle.id} completedCount={graded} />
+                                    {bundle.moderation_assignment && bundle.moderation_assignment.moderator_id && (
+                                      <DownloadModerationReportButton bundleId={bundle.id} disabled={!bundle.moderation_assignment.moderation_completed} />
+                                    )}
                                   </div>
                                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                                     <span>📝 {bundle.moderation_assignment.assessor_name}</span>

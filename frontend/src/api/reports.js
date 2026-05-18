@@ -32,6 +32,31 @@ export const exportBundlePdf = (bundleId) =>
     responseType: 'blob',
   })
 
+export const downloadModerationBundlePDF = async (bundleId) => {
+  const response = await axiosInstance.get(
+    `/api/reports/export/moderation-bundle-pdf/${bundleId}/`,
+    {
+      responseType: 'blob',
+      timeout: 120000, // 2 min timeout
+    }
+  )
+
+  const url = window.URL.createObjectURL(new Blob([response.data]))
+  const link = document.createElement('a')
+  link.href = url
+
+  const disposition = response.headers['content-disposition'] || ''
+  const filename = disposition.includes('filename=')
+    ? disposition.split('filename=')[1].replace(/"/g, '').trim()
+    : `moderated_result_bundle_${bundleId}.pdf`
+
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 // Reuse bundles list API — returns submitted bundles for the report page
 export const getBundlesForReport = () =>
   axiosInstance.get('/api/bundles/list/')

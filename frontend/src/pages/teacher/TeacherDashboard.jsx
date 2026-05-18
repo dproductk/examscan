@@ -6,6 +6,8 @@ import { changePassword } from '../../api/auth'
 import {
   getAssessmentBundles, getModerationBundles,
   getModerationStatus, requestComparison,
+  triggerCriticalAssessment, getCriticalAssessmentStatus,
+  requestCriticalComparison,
 } from '../../api/moderation'
 import StatusBadge from '../../components/StatusBadge'
 import LoadingSpinner from '../../components/LoadingSpinner'
@@ -26,6 +28,12 @@ function TeacherDashboard() {
   const [modStatuses, setModStatuses] = useState({})
   const [comparingBundle, setComparingBundle] = useState(null)
   const [comparisonResult, setComparisonResult] = useState(null)
+
+  // Critical assessment state
+  const [critStatuses, setCritStatuses] = useState({})
+  const [triggeringCrit, setTriggeringCrit] = useState(null)
+  const [critComparing, setCritComparing] = useState(null)
+  const [critResult, setCritResult] = useState(null)
   const [expandedPaper, setExpandedPaper] = useState(null)
 
   const [showPasswordModal, setShowPasswordModal] = useState(
@@ -56,8 +64,17 @@ function TeacherDashboard() {
         getModerationBundles(),
       ])
       setSheets(sheetsRes.data.results || sheetsRes.data)
-      setAssessmentBundles(assessRes.data.results || assessRes.data || [])
-      setModerationBundles(modRes.data.results || modRes.data || [])
+      
+      const assessData = assessRes.data.results || assessRes.data || []
+      const modData = modRes.data.results || modRes.data || []
+      
+      setAssessmentBundles(assessData)
+      setModerationBundles(modData)
+
+      // Preload moderation statuses so card data is visible before expanding
+      const bundlesToLoad = [...assessData.filter(b => b.moderation_assignment), ...modData]
+      bundlesToLoad.forEach(b => loadModerationStatus(b.id))
+      
     } catch { /* silent */ } finally { setLoading(false) }
   }
 
@@ -66,6 +83,52 @@ function TeacherDashboard() {
       const res = await getModerationStatus(bundleId)
       setModStatuses(prev => ({ ...prev, [bundleId]: res.data }))
     } catch { /* no moderation for this bundle */ }
+    // Also load critical assessment status
+    try {
+      const critRes = await getCriticalAssessmentStatus(bundleId)
+      setCritStatuses(prev => ({ ...prev, [bundleId]: critRes.data }))
+    } catch { /* not triggered yet */ }
+  }
+
+  const handleTriggerCritical = async (bundleId) => {
+    setTriggeringCrit(bundleId)
+    try {
+      const res = await triggerCriticalAssessment(bundleId)
+      setToastMessage({ type: 'success', text: `Critical Assessment: ${res.data.flagged_count} high-score paper(s) flagged.` })
+      setTimeout(() => setToastMessage({ type: '', text: '' }), 5000)
+      loadModerationStatus(bundleId)
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to trigger critical assessment.'
+      if (err.response?.data?.flagged_count === 0) {
+        setToastMessage({ type: 'success', text: 'No high-score papers found. Bundle is ready for submission.' })
+      } else {
+        setToastMessage({ type: 'error', text: msg })
+      }
+      setTimeout(() => setToastMessage({ type: '', text: '' }), 5000)
+      loadModerationStatus(bundleId)
+    } finally { setTriggeringCrit(null) }
+  }
+
+  const handleCriticalComparison = async (bundleId) => {
+    setCritComparing(bundleId)
+    setCritResult(null)
+    try {
+      const res = await requestCriticalComparison(bundleId)
+      setCritResult(res.data)
+      loadModerationStatus(bundleId)
+      if (res.data.bundle_status === 'PASSED') {
+        setToastMessage({ type: 'success', text: 'All high-score papers passed critical comparison!' })
+        setTimeout(() => setToastMessage({ type: '', text: '' }), 5000)
+      }
+    } catch (err) {
+      const data = err.response?.data
+      if (data?.status === 'BLOCKED') {
+        setCritResult(data)
+      } else {
+        setToastMessage({ type: 'error', text: data?.error || 'Critical comparison failed.' })
+        setTimeout(() => setToastMessage({ type: '', text: '' }), 5000)
+      }
+    } finally { setCritComparing(null) }
   }
 
   const handlePasswordChange = async (e) => {
@@ -335,6 +398,93 @@ function TeacherDashboard() {
                               {/* Moderation banner (assessment tab only) */}
                               {activeTab === 'assessment' && bundle.moderation_assignment && getModerationBanner(bundle.id)}
 
+                              {/* Critical Assessment section (assessment tab only) */}
+                              {activeTab === 'assessment' && bundle.moderation_assignment && modStatus?.assignment?.moderation_passed && (() => {
+                                const cs = critStatuses[bundle.id]
+                                const allCompleted = bundleSheets.length > 0 && bundleSheets.every(s => s.status === 'completed')
+                                const triggered = cs?.triggered
+                                const passed = cs?.passed
+                                const highCount = cs?.high_score_count || 0
+                                const modVerified = cs?.moderator_verified || 0
+                                const allVerified = highCount > 0 && modVerified >= highCount
+
+                                if (passed) {
+                                  return (
+                                    <div className="mod-banner mod-banner-success" style={{ marginTop: '0.5rem' }}>
+                                      🟢 Critical Assessment passed. All {highCount} high-score papers verified.
+                                    </div>
+                                  )
+                                }
+
+                                return (
+                                  <div style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>
+                                    {!triggered && allCompleted && (
+                                      <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={(e) => { e.stopPropagation(); handleTriggerCritical(bundle.id) }}
+                                        disabled={triggeringCrit === bundle.id}
+                                        style={{ background: '#D97706', borderColor: '#D97706' }}
+                                      >
+                                        {triggeringCrit === bundle.id ? '⏳ Checking...' : '⚡ Critical Assessment'}
+                                      </button>
+                                    )}
+                                    {triggered && highCount === 0 && (
+                                      <div className="mod-banner mod-banner-success" style={{ marginTop: '0.5rem' }}>
+                                        ✅ No high-score papers found. Bundle ready for submission.
+                                      </div>
+                                    )}
+                                    {triggered && highCount > 0 && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                        <div className="mod-banner mod-banner-warning">
+                                          ⚡ Critical Assessment: {modVerified}/{highCount} high-score papers verified by moderator.
+                                          {!allVerified && ' Waiting for moderator.'}
+                                        </div>
+                                        {allVerified && (
+                                          <button
+                                            className="btn btn-primary btn-sm"
+                                            onClick={(e) => { e.stopPropagation(); handleCriticalComparison(bundle.id) }}
+                                            disabled={critComparing === bundle.id}
+                                            style={{ background: '#D97706', borderColor: '#D97706' }}
+                                          >
+                                            {critComparing === bundle.id ? '⏳ Comparing...' : '📊 Request Critical Comparison'}
+                                          </button>
+                                        )}
+                                        {critResult?.status === 'BLOCKED' && (
+                                          <span style={{ fontSize: '0.85rem', color: 'var(--color-warning)' }}>{critResult.message}</span>
+                                        )}
+                                        {critResult?.papers && (
+                                          <div style={{ marginTop: '0.5rem' }}>
+                                            {critResult.papers.map(p => (
+                                              <div key={p.paper_id} style={{
+                                                padding: '0.5rem 0.75rem', marginBottom: '0.25rem',
+                                                borderRadius: '6px', fontSize: '0.85rem',
+                                                background: p.status === 'PASSED' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                                                border: `1px solid ${p.status === 'PASSED' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                                              }}>
+                                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{p.token}</span>
+                                                {' — '}
+                                                <span>Assessor: {p.assessor_total}, Moderator: {p.moderator_total}</span>
+                                                {' '}
+                                                <span style={{ fontWeight: 600 }}>{p.status === 'PASSED' ? '✅ Match' : '❌ Mismatch'}</span>
+                                                {p.status === 'FAILED' && (
+                                                  <button
+                                                    className="btn btn-danger btn-sm"
+                                                    style={{ marginLeft: '0.5rem', padding: '2px 8px', fontSize: '0.75rem' }}
+                                                    onClick={(e) => { e.stopPropagation(); navigate(`/teacher/evaluate/${p.paper_id}`, {
+                                                      state: { subjectCode: bundle.subject_code, role: 'assessor', assessmentType: 'correction', isCompleted: true }
+                                                    })}}
+                                                  >Correct Marks</button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })()}
+
                               {/* Request Comparison button */}
                               {activeTab === 'assessment' && bundle.moderation_assignment && modStatus && !modStatus.assignment?.moderation_passed && (() => {
                                 const assessorDone = modStatus.assessor_evaluated || 0
@@ -378,6 +528,54 @@ function TeacherDashboard() {
                               <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                                 {activeTab === 'moderation' ? 'Moderation Papers' : 'Answer Sheets'}
                               </h4>
+
+                              {/* High-Score Verification section for moderator tab */}
+                              {activeTab === 'moderation' && (() => {
+                                const cs = critStatuses[bundle.id]
+                                if (!cs?.triggered || cs.high_score_count === 0) return null
+                                const highScorePapers = cs.papers || []
+                                return (
+                                  <div style={{ marginBottom: '1.5rem' }}>
+                                    <h4 style={{ fontSize: '0.9rem', color: '#D97706', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                      ⚡ High-Score Verification ({cs.moderator_verified}/{cs.high_score_count})
+                                    </h4>
+                                    <table style={{ margin: 0, background: 'var(--background-secondary)', borderRadius: '8px', overflow: 'hidden', marginBottom: '1rem' }}>
+                                      <thead>
+                                        <tr style={{ background: 'rgba(217,119,6,0.1)' }}>
+                                          <th style={{ padding: '0.75rem 1rem' }}>Token</th>
+                                          <th style={{ padding: '0.75rem 1rem' }}>Assessor Total</th>
+                                          <th style={{ padding: '0.75rem 1rem' }}>Status</th>
+                                          <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Action</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {highScorePapers.map(p => (
+                                          <tr key={p.paper_id}>
+                                            <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace', fontWeight: 600 }}>{p.token}</td>
+                                            <td style={{ padding: '0.75rem 1rem' }}>{p.assessor_total}</td>
+                                            <td style={{ padding: '0.75rem 1rem' }}>
+                                              {p.moderator_verified
+                                                ? <span className="badge badge-completed">Verified ✓</span>
+                                                : <span className="badge badge-assigned">Pending</span>}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                                              <button
+                                                className="btn btn-primary btn-sm"
+                                                style={p.moderator_verified ? {} : { background: '#D97706', borderColor: '#D97706' }}
+                                                onClick={() => navigate(`/teacher/evaluate/${p.paper_id}`, {
+                                                  state: { subjectCode: bundle.subject_code, role: 'moderator', assessmentType: 'high_score', isCompleted: p.moderator_verified }
+                                                })}
+                                              >
+                                                {p.moderator_verified ? 'View Details' : 'Verify'}
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )
+                              })()}
 
                               {(() => {
                                 let displaySheets = [...bundleSheets]
@@ -504,6 +702,8 @@ function TeacherDashboard() {
                                                         <tr>
                                                           <td colSpan={3} style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                                             Allowed difference: ±{paperComparison.allowed_difference}
+                                                            <br />
+                                                            Total reflects the best valid combination based on attempt rules.
                                                           </td>
                                                         </tr>
                                                       </tfoot>

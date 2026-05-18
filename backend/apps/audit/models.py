@@ -28,6 +28,11 @@ class AuditLog(models.Model):
         ('MOD_COMP_FAILED', 'Moderation Comparison Failed'),
         ('MOD_CORRECTION', 'Moderation Correction'),
         ('MOD_UNLOCKED', 'Moderation Unlocked'),
+        # Critical assessment (high-score auto-moderation)
+        ('CRIT_TRIGGERED', 'Critical Assessment Triggered'),
+        ('CRIT_VERIFIED', 'Critical Verified'),
+        ('CRIT_COMPARISON', 'Critical Comparison'),
+        ('CRIT_CORRECTED', 'Critical Corrected'),
     ]
 
     action_type = models.CharField(max_length=30, choices=ACTION_CHOICES)

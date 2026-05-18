@@ -97,6 +97,10 @@ class BundleAssignment(models.Model):
     moderation_completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ── Critical Assessment (high-score auto-moderation) ─────────────────
+    critical_assessment_triggered = models.BooleanField(default=False)
+    critical_assessment_passed = models.BooleanField(default=False)
+
     class Meta:
         db_table = 'bundle_assignments'
 
@@ -111,14 +115,22 @@ class BundleAssignment(models.Model):
 
 class ModerationSample(models.Model):
     """
-    A paper randomly selected for moderation.
-    Generated during bundle assignment. Fixed forever — never regenerated.
+    A paper selected for moderation — either randomly (20% sample) or
+    automatically (high-score critical assessment ≥90%).
     """
+    SAMPLE_TYPE_CHOICES = [
+        ('random', 'Random Sample'),
+        ('high_score', 'High Score'),
+    ]
+
     bundle_assignment = models.ForeignKey(
         BundleAssignment, on_delete=models.CASCADE, related_name='samples'
     )
     answer_sheet = models.ForeignKey(
         'scanning.AnswerSheet', on_delete=models.CASCADE, related_name='moderation_samples'
+    )
+    sample_type = models.CharField(
+        max_length=20, choices=SAMPLE_TYPE_CHOICES, default='random',
     )
     selected_at = models.DateTimeField(auto_now_add=True)
 
@@ -127,7 +139,7 @@ class ModerationSample(models.Model):
         unique_together = ('bundle_assignment', 'answer_sheet')
 
     def __str__(self):
-        return f"Mod sample: Sheet #{self.answer_sheet_id} in Assignment #{self.bundle_assignment_id}"
+        return f"Mod sample ({self.sample_type}): Sheet #{self.answer_sheet_id} in Assignment #{self.bundle_assignment_id}"
 
 
 class ModerationPaperStatus(models.Model):
@@ -192,6 +204,7 @@ class Notification(models.Model):
         ('MODERATION_PASSED', 'Moderation Passed'),
         ('MODERATION_FAILED', 'Moderation Failed'),
         ('PAPERS_UNLOCKED', 'Papers Unlocked'),
+        ('CRIT_ASSESS_PENDING', 'Critical Assessment Pending'),
     ]
 
     recipient = models.ForeignKey(
@@ -211,3 +224,27 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"[{self.event_type}] → {self.recipient_id}"
+
+
+class CriticalAssessmentVerification(models.Model):
+    """
+    Stores the moderator's changes on a high-score paper during critical assessment.
+    Does NOT generate a new PDF — just records what changed.
+    """
+    moderation_sample = models.OneToOneField(
+        ModerationSample, on_delete=models.CASCADE, related_name='critical_verification',
+    )
+    moderator = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='critical_verifications',
+    )
+    moderator_section_results = models.JSONField()
+    moderator_total = models.PositiveIntegerField()
+    changed_questions = models.JSONField(default=dict)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'critical_assessment_verification'
+
+    def __str__(self):
+        return f"Critical verification for sample #{self.moderation_sample_id}"

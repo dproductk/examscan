@@ -14,3 +14,10 @@ export const saveDraft = (data) =>
 
 export const getPdfStatus = (evaluationId) =>
   axiosInstance.get(`/api/evaluations/${evaluationId}/pdf-status/`)
+
+// Critical Assessment (high-score auto-moderation)
+export const verifyHighScore = (sheetId, data) =>
+  axiosInstance.post(`/api/evaluations/${sheetId}/verify-high-score/`, data)
+
+export const correctCriticalMarks = (sheetId, data) =>
+  axiosInstance.post(`/api/evaluations/${sheetId}/correct-critical-marks/`, data)

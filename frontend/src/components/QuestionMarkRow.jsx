@@ -23,6 +23,8 @@ export default function QuestionMarkRow({
   placement, isActive,
   onClick, onIncrement, onDecrement, onClear, onManualInput,
   disabled = false,
+  highlighted = false,
+  moderatorHint = null,
 }) {
   const inputRef = useRef(null)
   const value    = placement?.value ?? null
@@ -85,8 +87,10 @@ export default function QuestionMarkRow({
         alignItems: 'center',
         padding: '12px 16px',
         borderBottom: '1px solid var(--border-light)',
-        borderLeft: isActive ? '3px solid #1D9E75' : '3px solid transparent',
-        background: isActive ? '#E1F5EE' : '#FFFFFF',
+        borderLeft: highlighted ? '3px solid #D97706'
+                  : isActive ? '3px solid #1D9E75' : '3px solid transparent',
+        background: highlighted ? '#FEF3C7'
+                  : isActive ? '#E1F5EE' : '#FFFFFF',
         cursor: disabled ? 'default' : 'pointer',
         gap: '10px',
         transition: 'background 0.1s ease',
@@ -231,6 +235,26 @@ export default function QuestionMarkRow({
       >
         ✕
       </button>
+
+      {/* Assessor / Moderator hint badge */}
+      {moderatorHint && (() => {
+        const isAssessorHint = moderatorHint.startsWith('Assessor:')
+        return (
+          <span style={{
+            fontSize: '11px',
+            color: isAssessorHint ? '#4338CA' : '#92400E',
+            background: isAssessorHint ? '#EEF2FF' : '#FEF3C7',
+            padding: '1px 6px',
+            borderRadius: '3px',
+            fontWeight: 600,
+            whiteSpace: 'nowrap',
+            marginLeft: '2px',
+            flexShrink: 0,
+          }}>
+            {moderatorHint}
+          </span>
+        )
+      })()}
     </div>
   )
 }

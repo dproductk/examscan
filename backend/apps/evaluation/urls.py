@@ -15,6 +15,10 @@ from .views import (
     NotificationListView,
     NotificationMarkReadView,
     NotificationMarkAllReadView,
+    # Critical Assessment
+    VerifyHighScoreView,
+    RequestCriticalComparisonView,
+    CorrectCriticalMarksView,
 )
 
 urlpatterns = [
@@ -38,12 +42,20 @@ urlpatterns = [
 
     # Check background PDF generation status
     path('<int:pk>/pdf-status/', PDFStatusView.as_view(), name='pdf-status'),
+
+    # Critical Assessment — moderator verifies high-score paper
+    path('<int:sheet_id>/verify-high-score/', VerifyHighScoreView.as_view(), name='verify-high-score'),
+
+    # Critical Assessment — assessor corrects failed paper
+    path('<int:sheet_id>/correct-critical-marks/', CorrectCriticalMarksView.as_view(), name='correct-critical-marks'),
 ]
 
 # Moderation URLs
 moderation_urlpatterns = [
     path('moderation/<int:bundle_id>/request-comparison/', RequestComparisonView.as_view(), name='moderation-compare'),
     path('moderation/<int:bundle_id>/status/', ModerationStatusView.as_view(), name='moderation-status'),
+    # Critical Assessment
+    path('moderation/<int:bundle_id>/request-critical-comparison/', RequestCriticalComparisonView.as_view(), name='critical-comparison'),
 ]
 
 # Teacher bundle URLs

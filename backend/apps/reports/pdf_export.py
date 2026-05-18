@@ -169,7 +169,7 @@ def generate_student_pdf_bytes(student):
 
 # ── Bundle PDF ────────────────────────────────────────────────────────────────
 
-def _build_bundle_pdf_elements(bundle_data, styles):
+def _build_bundle_pdf_elements(bundle_data, styles, report_title='Bundle Evaluation Report'):
     """
     Build all ReportLab elements for a bundle-level result PDF.
 
@@ -237,7 +237,7 @@ def _build_bundle_pdf_elements(bundle_data, styles):
     # ── Cover Page ─────────────────────────────────────────────────────────
     elements.append(Spacer(1, 0.5 * inch))
     elements.append(Paragraph('ExamFlow — Examination Management System', h_style))
-    elements.append(Paragraph('Bundle Evaluation Report', sub_h))
+    elements.append(Paragraph(report_title, sub_h))
     elements.append(Spacer(1, 0.3 * inch))
     elements.append(HRFlowable(width='100%', thickness=1.5, color=colors.HexColor('#1C1D22'), spaceAfter=0.3 * inch))
 
@@ -440,6 +440,26 @@ def generate_bundle_pdf_response(bundle_data):
     bundle_num = bundle_data.get('bundle_number', 'bundle')
     response = HttpResponse(content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="bundle_{bundle_num}_report.pdf"'
+    response.write(buffer.getvalue())
+    buffer.close()
+    return response
+
+
+def generate_moderation_bundle_pdf_response(bundle_data):
+    """Generate a downloadable PDF HttpResponse for a moderation bundle result."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=0.6 * inch, leftMargin=0.6 * inch,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+    )
+    styles = getSampleStyleSheet()
+    elements = _build_bundle_pdf_elements(bundle_data, styles, report_title='Moderated Bundle Result Report')
+    doc.build(elements)
+
+    bundle_num = bundle_data.get('bundle_number', 'bundle')
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="moderated_result_bundle_{bundle_num}.pdf"'
     response.write(buffer.getvalue())
     buffer.close()
     return response

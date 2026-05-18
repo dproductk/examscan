@@ -308,13 +308,16 @@ class EvaluationDetailView(APIView):
         role = request.query_params.get('role', 'assessor')
         try:
             result = EvaluationResult.objects.select_related(
-                'teacher', 'answer_sheet'
+                'teacher', 'answer_sheet', 'answer_sheet__bundle'
             ).get(answer_sheet_id=answer_sheet_id, role=role)
         except EvaluationResult.DoesNotExist:
             return Response({'error': 'Evaluation result not found.'}, status=404)
 
         if request.user.role == 'teacher' and result.teacher != request.user:
-            return Response({'error': 'Not authorized.'}, status=403)
+            # Allow moderators to read assessor evaluations for their assigned bundles
+            assignment = getattr(result.answer_sheet.bundle, 'moderation_assignment', None)
+            if not (assignment and request.user == assignment.moderator):
+                return Response({'error': 'Not authorized.'}, status=403)
 
         return Response(EvaluationResultSerializer(result).data)
 
@@ -433,12 +436,17 @@ class MarkedPDFView(APIView):
 
     def get(self, request, pk):
         try:
-            result = EvaluationResult.objects.select_related('answer_sheet').get(pk=pk)
+            result = EvaluationResult.objects.select_related(
+                'answer_sheet', 'answer_sheet__bundle'
+            ).get(pk=pk)
         except EvaluationResult.DoesNotExist:
             return Response({'error': 'Not found.'}, status=404)
 
         if request.user.role == 'teacher' and result.teacher != request.user:
-            return Response({'error': 'Forbidden.'}, status=403)
+            # Allow moderators to view assessor's marked PDF for their assigned bundles
+            assignment = getattr(result.answer_sheet.bundle, 'moderation_assignment', None)
+            if not (assignment and request.user == assignment.moderator):
+                return Response({'error': 'Forbidden.'}, status=403)
 
         if not result.marked_pdf_path:
             return Response({'error': 'Marked PDF not yet generated.'}, status=404)
@@ -750,3 +758,403 @@ class NotificationMarkAllReadView(APIView):
             recipient=request.user, is_read=False
         ).update(is_read=True)
         return Response({'status': 'ok'})
+
+
+# ─────────────────────────────────────────────────────────
+# Critical Assessment (High-Score Auto-Moderation)
+# ─────────────────────────────────────────────────────────
+
+class TriggerCriticalAssessmentView(APIView):
+    """POST /api/bundles/{bundle_id}/trigger-critical-assessment/"""
+    permission_classes = [IsTeacher]
+
+    def post(self, request, bundle_id):
+        try:
+            bundle = Bundle.objects.select_related('subject').get(pk=bundle_id)
+        except Bundle.DoesNotExist:
+            return Response({'error': 'Bundle not found.'}, status=404)
+
+        assignment = getattr(bundle, 'moderation_assignment', None)
+        if not assignment:
+            return Response({'error': 'No moderation assignment for this bundle.'}, status=400)
+
+        if request.user != assignment.assessor:
+            return Response({'error': 'Only the assessor can trigger critical assessment.'}, status=403)
+
+        if not assignment.moderation_passed:
+            return Response({'error': 'Random moderation must pass before critical assessment.'}, status=400)
+
+        if assignment.critical_assessment_triggered:
+            return Response({'error': 'Critical assessment already triggered.'}, status=400)
+
+        # Check all sheets are completed
+        total = bundle.answer_sheets.count()
+        completed = bundle.answer_sheets.filter(status='completed').count()
+        if completed < total:
+            return Response({
+                'error': f'Not all sheets completed. {completed}/{total} done.',
+            }, status=400)
+
+        try:
+            result = services.trigger_critical_assessment(request, bundle, assignment)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class CriticalAssessmentStatusView(APIView):
+    """GET /api/bundles/{bundle_id}/critical-assessment-status/"""
+    permission_classes = [IsTeacherOrExamDept]
+
+    def get(self, request, bundle_id):
+        try:
+            assignment = BundleAssignment.objects.select_related(
+                'bundle', 'assessor', 'moderator'
+            ).get(bundle_id=bundle_id)
+        except BundleAssignment.DoesNotExist:
+            return Response({'error': 'No moderation assignment.'}, status=404)
+
+        high_score_samples = assignment.samples.filter(
+            sample_type='high_score'
+        ).select_related('answer_sheet').all()
+
+        if not high_score_samples.exists():
+            return Response({
+                'triggered': assignment.critical_assessment_triggered,
+                'passed': assignment.critical_assessment_passed,
+                'high_score_count': 0,
+                'moderator_verified': 0,
+                'papers': [],
+            })
+
+        sample_sheet_ids = [s.answer_sheet_id for s in high_score_samples]
+
+        # Check moderator evaluations
+        moderator_eval_ids = set(
+            EvaluationResult.objects.filter(
+                answer_sheet_id__in=sample_sheet_ids,
+                role='moderator',
+            ).values_list('answer_sheet_id', flat=True)
+        )
+
+        # Get assessor evaluations for totals
+        assessor_evals = {
+            ev.answer_sheet_id: ev
+            for ev in EvaluationResult.objects.filter(
+                answer_sheet_id__in=sample_sheet_ids,
+                role='assessor',
+            )
+        }
+
+        # Get comparison statuses
+        paper_statuses = {}
+        for sample in high_score_samples:
+            try:
+                ps = sample.comparison_status
+                paper_statuses[sample.answer_sheet_id] = {
+                    'status': ps.status,
+                    'assessor_total': ps.assessor_total,
+                    'moderator_total': ps.moderator_total,
+                    'allowed_difference': ps.allowed_difference,
+                    'question_comparison': ps.question_comparison,
+                    'compared_at': ps.compared_at,
+                }
+            except ModerationPaperStatus.DoesNotExist:
+                pass
+
+        # Get verification records
+        from .models import CriticalAssessmentVerification
+        verifications = {}
+        for sample in high_score_samples:
+            try:
+                v = sample.critical_verification
+                verifications[sample.answer_sheet_id] = {
+                    'changed_questions': v.changed_questions,
+                    'moderator_total': v.moderator_total,
+                }
+            except CriticalAssessmentVerification.DoesNotExist:
+                pass
+
+        papers = []
+        for sample in high_score_samples:
+            sheet = sample.answer_sheet
+            assessor_ev = assessor_evals.get(sheet.id)
+            papers.append({
+                'paper_id': sheet.id,
+                'token': sheet.token,
+                'sample_id': sample.id,
+                'assessor_total': assessor_ev.total_marks if assessor_ev else None,
+                'moderator_verified': sheet.id in moderator_eval_ids,
+                'comparison': paper_statuses.get(sheet.id),
+                'verification': verifications.get(sheet.id),
+            })
+
+        return Response({
+            'triggered': assignment.critical_assessment_triggered,
+            'passed': assignment.critical_assessment_passed,
+            'high_score_count': len(sample_sheet_ids),
+            'moderator_verified': len(moderator_eval_ids & set(sample_sheet_ids)),
+            'papers': papers,
+        })
+
+
+class VerifyHighScoreView(APIView):
+    """POST /api/evaluations/{sheet_id}/verify-high-score/"""
+    permission_classes = [IsTeacher]
+
+    def post(self, request, sheet_id):
+        from math import ceil as _ceil
+        from .models import CriticalAssessmentVerification
+
+        try:
+            sheet = AnswerSheet.objects.get(pk=sheet_id)
+        except AnswerSheet.DoesNotExist:
+            return Response({'error': 'Answer sheet not found.'}, status=404)
+
+        assignment = getattr(sheet.bundle, 'moderation_assignment', None)
+        if not assignment:
+            return Response({'error': 'No moderation assignment.'}, status=400)
+
+        if request.user != assignment.moderator:
+            return Response({'error': 'Only the moderator can verify.'}, status=403)
+
+        # Check sheet is a high-score sample
+        sample = ModerationSample.objects.filter(
+            bundle_assignment=assignment,
+            answer_sheet=sheet,
+            sample_type='high_score',
+        ).first()
+        if not sample:
+            return Response({'error': 'This paper is not a high-score sample.'}, status=400)
+
+        section_results = request.data.get('section_results')
+        if not section_results:
+            return Response({'error': 'section_results is required.'}, status=400)
+
+        # Check for existing draft to pass as instance (prevents unique constraint validation errors)
+        existing_eval = EvaluationResult.objects.filter(answer_sheet=sheet, role='moderator').first()
+
+        # Use the serializer to validate and compute the best-combination total
+        from .serializers import EvaluationResultSerializer
+        serializer = EvaluationResultSerializer(
+            instance=existing_eval,
+            data={
+                'section_results': section_results,
+                'answer_sheet': sheet.id,
+                'role': 'moderator',
+                'pdf_version_at_grading': sheet.pdf_version,
+            },
+            partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        section_results = serializer.validated_data['section_results']
+        total = getattr(serializer, '_computed_total', 0)
+
+        # Get assessor's section_results for diff
+        try:
+            assessor_eval = EvaluationResult.objects.get(
+                answer_sheet=sheet, role='assessor',
+            )
+        except EvaluationResult.DoesNotExist:
+            return Response({'error': 'No assessor evaluation found.'}, status=400)
+
+        # Build changed_questions diff
+        from .services import _flatten_section_marks
+        assessor_marks = _flatten_section_marks(assessor_eval.section_results)
+        moderator_marks = _flatten_section_marks(section_results)
+
+        changed_questions = {}
+        for q_label in set(assessor_marks.keys()) | set(moderator_marks.keys()):
+            a_val = assessor_marks.get(q_label, 0)
+            m_val = moderator_marks.get(q_label, 0)
+            if a_val != m_val:
+                changed_questions[q_label] = {
+                    'assessor_marks': a_val,
+                    'moderator_marks': m_val,
+                }
+
+        # Create/update moderator EvaluationResult
+        moderator_eval, created = EvaluationResult.objects.update_or_create(
+            answer_sheet=sheet,
+            role='moderator',
+            defaults={
+                'teacher': request.user,
+                'section_results': section_results,
+                'total_marks': total,
+                'pdf_version_at_grading': sheet.pdf_version,
+                'is_final': True,
+                'pdf_status': 'skipped',  # no PDF for moderator verification
+            },
+        )
+
+        # Create/update CriticalAssessmentVerification
+        CriticalAssessmentVerification.objects.update_or_create(
+            moderation_sample=sample,
+            defaults={
+                'moderator': request.user,
+                'moderator_section_results': section_results,
+                'moderator_total': total,
+                'changed_questions': changed_questions,
+            },
+        )
+
+        log_action(
+            request, 'CRIT_VERIFIED', 'EvaluationResult', moderator_eval.pk,
+            new_value={
+                'total_marks': total,
+                'changed_count': len(changed_questions),
+                'sheet_id': sheet.id,
+            },
+            notes=f'High-score verification by {request.user.full_name}. '
+                  f'Total: {total}. {len(changed_questions)} question(s) changed.',
+        )
+
+        return Response({
+            'status': 'verified',
+            'total_marks': total,
+            'changed_questions': changed_questions,
+        })
+
+
+class RequestCriticalComparisonView(APIView):
+    """POST /api/moderation/{bundle_id}/request-critical-comparison/"""
+    permission_classes = [IsTeacher]
+
+    def post(self, request, bundle_id):
+        try:
+            assignment = BundleAssignment.objects.select_related(
+                'bundle', 'assessor', 'moderator'
+            ).get(bundle_id=bundle_id)
+        except BundleAssignment.DoesNotExist:
+            return Response({'error': 'No moderation assignment.'}, status=404)
+
+        if request.user != assignment.assessor:
+            return Response({'error': 'Only the assessor can request comparison.'}, status=403)
+
+        if not assignment.critical_assessment_triggered:
+            return Response({'error': 'Critical assessment not yet triggered.'}, status=400)
+
+        # Check all high-score papers have moderator evaluations
+        is_complete, missing = services.check_critical_moderator_completion(assignment)
+        if not is_complete:
+            return Response({
+                'status': 'BLOCKED',
+                'message': f'Moderator has not verified all papers. {missing} remaining.',
+                'missing_count': missing,
+            })
+
+        result = services.run_critical_comparison(request, assignment)
+        return Response(result)
+
+
+class CorrectCriticalMarksView(APIView):
+    """POST /api/evaluations/{sheet_id}/correct-critical-marks/"""
+    permission_classes = [IsTeacher]
+
+    def post(self, request, sheet_id):
+        from math import ceil as _ceil
+        from .models import CriticalAssessmentVerification
+
+        try:
+            sheet = AnswerSheet.objects.get(pk=sheet_id)
+        except AnswerSheet.DoesNotExist:
+            return Response({'error': 'Answer sheet not found.'}, status=404)
+
+        assignment = getattr(sheet.bundle, 'moderation_assignment', None)
+        if not assignment:
+            return Response({'error': 'No moderation assignment.'}, status=400)
+
+        if request.user != assignment.assessor:
+            return Response({'error': 'Only the assessor can correct.'}, status=403)
+
+        # Check this paper has a FAILED status
+        sample = ModerationSample.objects.filter(
+            bundle_assignment=assignment,
+            answer_sheet=sheet,
+            sample_type='high_score',
+        ).first()
+        if not sample:
+            return Response({'error': 'Not a high-score sample.'}, status=400)
+
+        try:
+            paper_status = sample.comparison_status
+        except ModerationPaperStatus.DoesNotExist:
+            return Response({'error': 'No comparison run yet.'}, status=400)
+
+        if paper_status.status != 'FAILED':
+            return Response({'error': 'Paper has not failed comparison.'}, status=400)
+
+        # Get correction data
+        section_results = request.data.get('section_results')
+        mark_positions = request.data.get('mark_positions', [])
+
+        if not section_results:
+            return Response({'error': 'section_results is required.'}, status=400)
+
+        # Check for existing draft to pass as instance
+        existing_eval = EvaluationResult.objects.filter(answer_sheet=sheet, role='assessor').first()
+
+        # Use the serializer to validate and compute the best-combination total
+        from .serializers import EvaluationResultSerializer
+        serializer = EvaluationResultSerializer(
+            instance=existing_eval,
+            data={
+                'section_results': section_results,
+                'answer_sheet': sheet.id,
+                'role': 'assessor',
+                'pdf_version_at_grading': sheet.pdf_version,
+            },
+            partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        section_results = serializer.validated_data['section_results']
+        total = getattr(serializer, '_computed_total', 0)
+
+        # Create revision before correction
+        try:
+            assessor_eval = EvaluationResult.objects.get(
+                answer_sheet=sheet, role='assessor',
+            )
+            services.create_evaluation_revision(
+                assessor_eval, request.user, reason='Critical assessment correction'
+            )
+        except EvaluationResult.DoesNotExist:
+            return Response({'error': 'No assessor evaluation found.'}, status=400)
+
+        # Update assessor evaluation
+        old_total = assessor_eval.total_marks
+        assessor_eval.section_results = section_results
+        assessor_eval.total_marks = total
+        assessor_eval.mark_positions = mark_positions
+        assessor_eval.save(update_fields=[
+            'section_results', 'total_marks', 'mark_positions',
+        ])
+
+        # Re-queue PDF generation
+        if mark_positions:
+            assessor_eval.pdf_status = 'pending'
+            assessor_eval.save(update_fields=['pdf_status'])
+            from .pdf_worker import submit_pdf_task
+            submit_pdf_task(assessor_eval.pk)
+
+        # Reset paper status to PENDING for re-comparison
+        paper_status.status = 'PENDING'
+        paper_status.save(update_fields=['status'])
+
+        # Reset assignment passed flag so comparison can run again
+        assignment.critical_assessment_passed = False
+        assignment.save(update_fields=['critical_assessment_passed'])
+
+        log_action(
+            request, 'CRIT_CORRECTED', 'EvaluationResult', assessor_eval.pk,
+            old_value={'total_marks': old_total},
+            new_value={'total_marks': total, 'sheet_id': sheet.id},
+            notes=f'Assessor corrected marks after critical comparison. '
+                  f'Old: {old_total}, New: {total}.',
+        )
+
+        return Response({
+            'status': 'corrected',
+            'total_marks': total,
+        })

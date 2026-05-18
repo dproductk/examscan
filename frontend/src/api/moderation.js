@@ -27,3 +27,13 @@ export const markNotificationRead = (id) =>
 
 export const markAllNotificationsRead = () =>
   axiosInstance.patch('/api/notifications/read-all/')
+
+// Critical Assessment (high-score auto-moderation)
+export const triggerCriticalAssessment = (bundleId) =>
+  axiosInstance.post(`/api/bundles/${bundleId}/trigger-critical-assessment/`)
+
+export const getCriticalAssessmentStatus = (bundleId) =>
+  axiosInstance.get(`/api/bundles/${bundleId}/critical-assessment-status/`)
+
+export const requestCriticalComparison = (bundleId) =>
+  axiosInstance.post(`/api/moderation/${bundleId}/request-critical-comparison/`)

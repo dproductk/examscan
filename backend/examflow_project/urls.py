@@ -7,7 +7,11 @@ from django.conf import settings
 from django.conf.urls.static import static
 
 from apps.evaluation.urls import moderation_urlpatterns, teacher_urlpatterns, notification_urlpatterns
-from apps.evaluation.views import BundleAssignmentCreateView
+from apps.evaluation.views import (
+    BundleAssignmentCreateView,
+    TriggerCriticalAssessmentView,
+    CriticalAssessmentStatusView,
+)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -28,6 +32,10 @@ urlpatterns = [
     # Evaluation — marking schemes & evaluations
     path('api/marking-schemes/', include(('apps.evaluation.urls_schemes', 'eval-schemes'), namespace='eval-schemes')),
     path('api/evaluations/', include(('apps.evaluation.urls', 'evaluations'), namespace='evaluations')),
+
+    # Critical Assessment (high-score auto-moderation)
+    path('api/bundles/<int:bundle_id>/trigger-critical-assessment/', TriggerCriticalAssessmentView.as_view(), name='trigger-critical-assessment'),
+    path('api/bundles/<int:bundle_id>/critical-assessment-status/', CriticalAssessmentStatusView.as_view(), name='critical-assessment-status'),
 
     # Amendments
     path('api/amendments/', include('apps.amendments.urls')),

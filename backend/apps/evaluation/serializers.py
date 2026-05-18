@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import (
     EvaluationResult, BundleAssignment, ModerationSample,
     ModerationPaperStatus, EvaluationRevision, Notification,
+    CriticalAssessmentVerification,
 )
 
 
@@ -122,7 +123,20 @@ class ModerationSampleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ModerationSample
-        fields = ['id', 'sheet_id', 'token', 'selected_at']
+        fields = ['id', 'sheet_id', 'token', 'sample_type', 'selected_at']
+
+
+class CriticalAssessmentVerificationSerializer(serializers.ModelSerializer):
+    moderator_name = serializers.CharField(source='moderator.full_name', read_only=True)
+
+    class Meta:
+        model = CriticalAssessmentVerification
+        fields = [
+            'id', 'moderation_sample', 'moderator', 'moderator_name',
+            'moderator_section_results', 'moderator_total',
+            'changed_questions', 'submitted_at',
+        ]
+        read_only_fields = ['id', 'submitted_at']
 
 
 class ModerationPaperStatusSerializer(serializers.ModelSerializer):

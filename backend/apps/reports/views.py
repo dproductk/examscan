@@ -278,6 +278,71 @@ class BundlePDFExportView(APIView):
         return generate_bundle_pdf_response(bundle_data)
 
 
+class DownloadModerationBundlePDFView(APIView):
+    """
+    GET /api/reports/export/moderation-bundle-pdf/<bundle_id>/
+    Download a single PDF that covers every moderated answer sheet in a bundle.
+    Each sheet gets its own page containing the moderator's marks.
+    """
+    permission_classes = [IsExamDept]
+
+    def get(self, request, bundle_id):
+        from datetime import date
+
+        try:
+            bundle = Bundle.objects.select_related('subject').get(pk=bundle_id)
+        except Bundle.DoesNotExist:
+            return Response({'error': 'Bundle not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch answer sheets that have a finalized moderator evaluation
+        sheets_qs = AnswerSheet.objects.filter(
+            bundle=bundle,
+            evaluations__role='moderator',
+            evaluations__is_final=True
+        ).prefetch_related('evaluations').distinct().order_by('roll_number')
+
+        sheets_data = []
+        for sheet in sheets_qs:
+            # Pick the moderator evaluation
+            evals = list(sheet.evaluations.all())
+            mod_eval = next((e for e in evals if e.role == 'moderator' and e.is_final), None)
+            
+            if not mod_eval:
+                continue
+
+            sheets_data.append({
+                'roll_number': sheet.roll_number or 'N/A',
+                'token': sheet.token or 'N/A',
+                'status': sheet.status,
+                'total_marks': mod_eval.total_marks,
+                'section_results': mod_eval.section_results,
+            })
+
+        if not sheets_data:
+            return Response({'error': 'No moderated papers found for this bundle.'}, status=status.HTTP_404_NOT_FOUND)
+
+        bundle_data = {
+            'bundle_number': bundle.bundle_number,
+            'subject_code': bundle.subject.subject_code,
+            'subject_name': bundle.subject.subject_name,
+            'department': bundle.subject.department,
+            'semester': bundle.subject.semester,
+            'academic_year': bundle.academic_year,
+            'total_sheets': len(sheets_data),
+            'generated_on': date.today().strftime('%d %B %Y'),
+            'sheets': sheets_data,
+        }
+
+        log_action(
+            request, 'RESULT_GENERATED', 'Bundle', bundle_id,
+            notes=f'Moderation Bundle PDF exported for bundle #{bundle.bundle_number} ({len(sheets_data)} sheets).'
+        )
+
+        from .pdf_export import generate_moderation_bundle_pdf_response
+        return generate_moderation_bundle_pdf_response(bundle_data)
+
+
+
 def _prepend_result_page(result_page_bytes: bytes, marked_pdf_path: str) -> bytes:
     """
     Prepends the result summary page to the marked PDF.

@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import ReportsSummaryView, ExcelExportView, StudentPDFExportView, AllPDFsExportView, BundlePDFExportView, DownloadMarkedPDFsView
+from .views import ReportsSummaryView, ExcelExportView, StudentPDFExportView, AllPDFsExportView, BundlePDFExportView, DownloadMarkedPDFsView, DownloadModerationBundlePDFView
 
 urlpatterns = [
     path('', ReportsSummaryView.as_view(), name='reports-summary'),
@@ -7,5 +7,6 @@ urlpatterns = [
     path('export/student-pdf/<str:roll_number>/', StudentPDFExportView.as_view(), name='reports-student-pdf'),
     path('export/all-pdfs/', AllPDFsExportView.as_view(), name='reports-all-pdfs'),
     path('export/bundle-pdf/<int:bundle_id>/', BundlePDFExportView.as_view(), name='reports-bundle-pdf'),
+    path('export/moderation-bundle-pdf/<int:bundle_id>/', DownloadModerationBundlePDFView.as_view(), name='download-moderation-bundle-pdf'),
     path('download-marked-pdfs/', DownloadMarkedPDFsView.as_view(), name='download-marked-pdfs'),
 ]
